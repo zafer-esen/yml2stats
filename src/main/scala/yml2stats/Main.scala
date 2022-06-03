@@ -7,10 +7,11 @@ import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
 import yml2stats.parser.{EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
+import java.util.Date
 
 object Main extends App {
 
-  import Parameters._
+  import Settings._
 
   override def main(args: Array[String]): Unit = {
     val usage =
@@ -82,7 +83,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 ////////////////////////////////////////////////////////////////////////////////
 // Convert YAML ASTs into useful data structures
 
-    val toolRuns : Seq[(Summary, RunInfos)] =
+    val unmergedToolRuns : Seq[(Summary, RunInfos)] =
       for ((fileName, ast) <- yamlAsts) yield {
         print("Processing " + fileName + "...")
         val (rawSummary, rawRunInfos) =
@@ -109,6 +110,64 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         println("done! " + runInfos.length + " runs found.")
         (Summary(rawSummary, fileName), runInfos)
       }
+
+    val toolRuns = if(mergeYmlFiles) {
+      println
+      println("Merging files with same tool name and options...")
+      val groupedToolRuns =
+        unmergedToolRuns.groupBy(p => p._1.toolName +  " (" + p._1.toolOptions + ")")
+      for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
+        // checks to ensure merged files do not differ in any parameters
+        if (toBeMergedRuns.length > 1) {
+          println("Found " + toBeMergedRuns.length + " file(s) for " + nameAndOpts)
+          val summaries = toBeMergedRuns.map(_._1)
+          if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
+            println("Warning: runs were executed on systems with different CPU counts!")
+          }
+          if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
+            println("Warning: runs were executed on systems with different architectures!")
+          }
+          if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
+            println("Warning: runs were executed on systems with different cpu models!")
+          }
+          if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
+            println("Warning: runs were executed on systems with different total memories!")
+          }
+          if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
+            println("Warning: runs were executed on systems with different wall time limits!")
+          }
+          if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
+            println("Warning: runs were executed on systems with different CPU time limits!")
+          }
+          if (summaries.exists(s => s.toolVersion != summaries.head.toolVersion)) {
+            println("Warning: runs were executed with different versions of the tool!")
+          }
+          val summary = toBeMergedRuns.head._1 // take the summary of the first one
+          val allRunsWithDate = toBeMergedRuns.flatMap(p => p._2.runs zip
+            p._2.runs.indices.map(_ => p._1.startDate))
+          val runsGroupedByBmName: Seq[(String, Seq[(RunInfo, Date)])] =
+            allRunsWithDate.groupBy(runs => runs._1.bmBaseName).toSeq
+          val uniqueRuns : Seq[RunInfo] =
+            for ((name, runsWithDate) <- runsGroupedByBmName) yield {
+            if(runsWithDate.length > 1) {
+              val latestRun = runsWithDate.maxBy(p => p._2)
+              println("\tFound " + runsWithDate.length + " benchmarks with the same" +
+                " name (" + name + ") while merging. \n" +
+                "\t\tTaking the one executed on " + latestRun._2 + ".")
+              latestRun._1
+            } else runsWithDate.head._1
+          }
+
+          val runs = RunInfos(uniqueRuns)
+
+
+
+          println("\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
+          (summary, runs)
+        } else toBeMergedRuns.head
+      }
+    } else unmergedToolRuns
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
@@ -164,7 +223,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
 
     val errorRunNamesForEachTool : Seq[Seq[String]] =
-      toolRuns.map(p => p._2.errorRuns.map(_.bmBaseName))
+      toolRuns.map(p => p._2.errorRuns.map(_.bmBaseName)).toSeq
     val combinedErrorRuns : Set[String] =
       errorRunNamesForEachTool.reduce(_ union _).toSet
     val commonBenchmarkNamesWithoutErrors : Set[String] =
@@ -184,8 +243,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
     //commonBenchmarkNamesWithoutErrors.foreach(println)
 
-    val filteredToolRuns =
-      for ((summary, runs) <- toolRuns) yield {
+    val filteredToolRuns : Seq[(Summary, RunInfos)] =
+      (for ((summary, runs) <- toolRuns) yield {
         val filteredRuns = runs.runs.filter(run =>
           if (excludeErrors)
             commonBenchmarkNamesWithoutErrors contains run.bmBaseName
@@ -193,7 +252,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
             commonBenchmarkNames contains run.bmBaseName
         )
         (summary, RunInfos(filteredRuns))
-      }
+      }).toSeq
 
     // todo print relevant parts of the summaries of each tool (timeouts etc.)
 

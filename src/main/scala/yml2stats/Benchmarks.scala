@@ -3,7 +3,7 @@ package yml2stats
 import net.jcazevedo.moultingyaml._
 
 object Benchmarks {
-  import Parameters._
+  import Settings._
 
   object ErrorType extends Enumeration {
     type ErrorType = Value
@@ -138,7 +138,7 @@ object Benchmarks {
         raw.cpuCount.toInt,
         raw.architecture,
         raw.memTotal,
-        raw.startDate,
+        dateFormat.parse(raw.startDate),
         raw.scriptDir,
         raw.notes,
         fileName
@@ -155,7 +155,7 @@ object Benchmarks {
                      cpuCount      : Int,
                      architecture  : String,
                      memTotal      : String, // todo: int in MB?
-                     startDate     : String,
+                     startDate     : java.util.Date,
                      scriptDir     : String,
                      notes         : String,
                      ymlFileName   : String) {
