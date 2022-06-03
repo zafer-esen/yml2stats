@@ -287,5 +287,13 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
       println
     }
+
+// Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
+    // todo: wip, only here for testing purposes
+    if(plotDurations && filteredToolRuns.length > 1) {
+      println
+      println("Plotting durations")
+      Plotting.plotRuns(filteredToolRuns(0), filteredToolRuns(1))
+    }
   }
 }

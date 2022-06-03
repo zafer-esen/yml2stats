@@ -8,6 +8,8 @@ object Settings {
   var printIndividualStats  = true
   var printCombinedResults  = true
 
+  var plotDurations         = true
+
   // exclude benchmarks that could not be processed in *any* of the provided files
   var excludeErrors         = false
 
