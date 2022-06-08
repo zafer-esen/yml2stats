@@ -8,10 +8,9 @@ import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
 import yml2stats.parser.{EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
 import java.util.Date
+import Settings._
 
 object Main extends App {
-
-  import Settings._
 
   override def main(args: Array[String]): Unit = {
     val usage =
@@ -78,6 +77,11 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           throw new Exception("Could not parse " + file.getName)
       }
 
+    }
+
+    if (yamlAsts.isEmpty) {
+      println("No .yml files found in " + inFileName)
+      return
     }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -271,6 +275,32 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       println(columns.mkString("\t\t\t"))
     }
 
+////////////////////////////////////////////////////////////////////////////////
+// Consistency checks
+    {
+      def runsAreConsistent (run1 : RunInfo, run2 : RunInfo) = {
+        run1.result match {
+          case True if run2.result == False => false
+          case False if run2.result == True => false
+          case _ => true
+        }
+      }
+      println
+      for (bmName <- commonBenchmarkNames) {
+        val runPerTool =
+          filteredToolRuns.map{case (_, toolRuns) => toolRuns.getRun(bmName).get}
+        for (Seq(run1, run2) <- runPerTool.combinations(2)) {
+          if(!runsAreConsistent(run1, run2)) {
+            println("Warning: " +
+              run1.bmBaseName + " does not have consistent results in" +
+              " all tools: " + run1.result + " vs " + run2.result +
+              " (expected: " + run1.expected)
+          }
+        }
+      }
+    }
+////////////////////////////////////////////////////////////////////////////////
+
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
     println
     for(((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
@@ -290,10 +320,18 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
     // todo: wip, only here for testing purposes
-    if(plotDurations && filteredToolRuns.length > 1) {
+    if((plotDurations || plotDurationsFile) && filteredToolRuns.length > 1) {
       println
-      println("Plotting durations")
-      Plotting.plotRuns(filteredToolRuns(0), filteredToolRuns(1))
+      println("Generating durations plots")
+      for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
+        Plotting.plotDuratıons(toolRuns1, toolRuns2)
+      }
+    }
+
+    if(plotCactus || plotCactusFile) {
+      println
+      println("Generating cactus plot")
+      Plotting.plotCactus(filteredToolRuns)
     }
   }
 }

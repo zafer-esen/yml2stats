@@ -10,7 +10,8 @@ lazy val root = (project in file("."))
     name := "yml2stats",
     libraryDependencies += scalaTest % Test,
     libraryDependencies += "net.jcazevedo" %% "moultingyaml" % "0.4.2",
-    libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2"
+    libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2",
+    libraryDependencies += "org.plotly-scala" %% "kaleido" % "0.1.0" // kaleido bindings for scala for generating images in png, svg etc.
     //    libraryDependencies += "org.vegas-viz" %% "vegas" % "0.3.11" // requires scala 2.11
 //    libraryDependencies += "co.theasi" %% "plotly" % "0.2.0"  // requires scala 2.11
   )

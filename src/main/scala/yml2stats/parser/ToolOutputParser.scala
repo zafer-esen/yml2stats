@@ -86,9 +86,12 @@ object Z3OutputParser extends ToolOutputParser {
     var _isUnknown = false
     var _isError = false
     var _isWallTimeout = false
+    var _isKilled = false
 
     for (line <- outputLines) {
       line match {
+        case _ if line contains "killed" =>
+          _isKilled = true;
         case _ if line contains "error" =>
           _isError = true;
         case _ if line contains "unsat" =>
@@ -116,7 +119,7 @@ object Z3OutputParser extends ToolOutputParser {
       }
     }
 
-    val result: Result = if (_isError) {
+    val result: Result = if (_isError || _isKilled) {
       val errorMsg = outputLines.mkString("\n")
       val errorTypes = new MHashSet[ErrorType.Value]
       for(line <- outputLines) {
@@ -127,9 +130,13 @@ object Z3OutputParser extends ToolOutputParser {
             errorTypes += ErrorType.Parse
           case _ if line contains "error" =>
             errorTypes += ErrorType.Other // todo: detect other errors
+          case _ if line contains "out of memory" =>
+            errorTypes += ErrorType.OutOfMemory // todo: detect other errors
           case _ => // nothing
         }
       }
+      if (errorTypes.isEmpty)
+        errorTypes += ErrorType.Other
       Error(errorTypes.toSet, errorMsg)
     } else if (_isSat) {
       True

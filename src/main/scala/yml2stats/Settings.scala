@@ -1,5 +1,8 @@
 package yml2stats
 
+import plotly.kaleido
+import plotly.element._
+
 object Settings {
   // default args
   var inFileName = ""
@@ -8,7 +11,29 @@ object Settings {
   var printIndividualStats  = true
   var printCombinedResults  = true
 
-  var plotDurations         = true
+  var plotDurations              = true
+  var plotDurationsFile          = true
+  var plotDurationsPdfNamePrefix = "durations"
+  var plotDurationsMarkerSize    = 4
+  var plotDurationsMarkerSymbol  = Symbol.Diamond()
+  var plotDurationsFileScale     = 1
+  var plotDurationsWidth         = 600
+  var plotDurationsHeight        = 640
+  var plotDurationsShowDiagonal  = true
+  var plotDurationsShowDiagonalExplanations = true // also requires diagonal to be shown
+
+  var plotCactus            = true
+  var plotCactusFile         = true
+  var plotCactusPdfName     = "cactus"
+  var plotCactusFileScale    = 1
+  var plotCactusWidth       = 600
+  var plotCactusHeight      = 640
+
+  var plotSaveDirectory     = System.getProperty("user.dir")
+  var plotOutputFormat      = kaleido.KaleidoFormat.PDF
+
+  var kaleidoDirectory      =
+    System.getProperty("user.dir") + "/dependencies/kaleido/kaleido"
 
   // exclude benchmarks that could not be processed in *any* of the provided files
   var excludeErrors         = false
@@ -26,5 +51,8 @@ object Settings {
   var discardBenchmarkExtensions = true
 
   val dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+
+  // enable dev. assertions
+  var assertsOn = true
 
 }

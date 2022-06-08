@@ -7,7 +7,7 @@ object Benchmarks {
 
   object ErrorType extends Enumeration {
     type ErrorType = Value
-    val Parse, Encode, Solve, Other = Value
+    val Parse, Encode, Solve, OutOfMemory, Other = Value
   }
 
   case class SummaryRaw(toolName      : String,
@@ -70,17 +70,20 @@ object Benchmarks {
   }
 
   object RunInfos {
-    def apply(runs : Seq[RunInfo]) : RunInfos =
+    def apply(runs : Seq[RunInfo]) : RunInfos = {
+      val sortedRuns = runs.sortBy(_.bmBaseName)
       new RunInfos(
-        runs,
-        runs.filter(run => run.result == True),
-        runs.filter(run => run.result == False),
-        runs.filter(run => run.result == Unknown),
-        runs.filter(run => run.result.isInstanceOf[Error]), // todo: categorize (parse/encode etc.)?
-        runs.filter(run => run.result == Timeout) // todo: categorize (wall/cpu)?
+        sortedRuns.sortBy(_.bmBaseName),
+        sortedRuns.filter(run => run.result == True),
+        sortedRuns.filter(run => run.result == False),
+        sortedRuns.filter(run => run.result == Unknown),
+        sortedRuns.filter(run => run.result.isInstanceOf[Error]), // todo: categorize (parse/encode etc.)?
+        sortedRuns.filter(run => run.result == Timeout) // todo: categorize (wall/cpu)?
       )
+    }
   }
 
+  // note: runs should be sorted!
   class RunInfos(val runs : Seq[RunInfo],
                  val satRuns : Seq[RunInfo],
                  val unsatRuns : Seq[RunInfo],
@@ -88,6 +91,10 @@ object Benchmarks {
                  val errorRuns : Seq[RunInfo],
                  val timeoutRuns : Seq[RunInfo]) {
     val length      = runs.length
+
+    def getRun(bmBaseName : String) : Option[RunInfo] =
+      runs.find(run => run.bmBaseName == bmBaseName)
+
     private def diffByBaseName (a : Seq[RunInfo],
                                 b : Seq[RunInfo]) : Seq[RunInfo] = {
       val diffNames = (a.map(_.bmBaseName) diff b.map(_.bmBaseName))
