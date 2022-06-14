@@ -11,6 +11,9 @@ object Settings {
   var printIndividualStats  = true
   var printCombinedResults  = true
 
+  // overrides all other plot settings
+  var disableAllPlots            = true
+
   var plotDurations              = true
   var plotDurationsFile          = true
   var plotDurationsPdfNamePrefix = "durations"

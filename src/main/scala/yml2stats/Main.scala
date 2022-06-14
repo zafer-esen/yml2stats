@@ -1,13 +1,13 @@
 package yml2stats
 
 import scala.collection.mutable.{HashSet => MHashSet}
-
 import scala.io.Source
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
-import yml2stats.parser.{EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
+import yml2stats.parser.{CPAOutputParser, EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
 import java.util.Date
+
 import Settings._
 
 object Main extends App {
@@ -97,12 +97,17 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           rawSummary.toolName match { // todo: maybe another method?
             case s if s.toLowerCase contains "eld" => EldaricaOutputParser
             case s if s.toLowerCase contains "z3"  => Z3OutputParser
+            case s if s.toLowerCase contains "cpa" => CPAOutputParser
+            case s => throw new Exception("An output parser for the tool " +
+              s + " is not yet implemented.")
           }
 
         val expectedStatusParser =
           rawSummary.toolName match { // todo: maybe another method?
             case s if (s.toLowerCase contains "eld") ||
-                      (s.toLowerCase contains "z3") => SMTExpectedStatusParser
+                      (s.toLowerCase contains "z3") ||
+                      (s.toLowerCase contains "cpa") => // todo: cpa only if it is printed in the same way as SMT expected status
+              SMTExpectedStatusParser
           }
 
         val runInfos = RunInfos(for (rawRunInfo <- rawRunInfos) yield {
@@ -288,13 +293,17 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       println
       for (bmName <- commonBenchmarkNames) {
         val runPerTool =
-          filteredToolRuns.map{case (_, toolRuns) => toolRuns.getRun(bmName).get}
-        for (Seq(run1, run2) <- runPerTool.combinations(2)) {
+          filteredToolRuns.map{case (summary, toolRuns) =>
+            (summary.toolName ,toolRuns.getRun(bmName).get)}
+        for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
           if(!runsAreConsistent(run1, run2)) {
             println("Warning: " +
               run1.bmBaseName + " does not have consistent results in" +
-              " all tools: " + run1.result + " vs " + run2.result +
-              " (expected: " + run1.expected)
+              " all tools:\n\t" +
+              runPerTool.map{
+                case (tool, run) => tool + " (expected: " + run.expected +
+                  ", result: " + run.result + ")"
+              }.mkString("\n\t"))
           }
         }
       }
@@ -320,7 +329,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
     // todo: wip, only here for testing purposes
-    if((plotDurations || plotDurationsFile) && filteredToolRuns.length > 1) {
+    if(!disableAllPlots && (plotDurations || plotDurationsFile) &&
+      filteredToolRuns.length > 1) {
       println
       println("Generating durations plots")
       for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
@@ -328,7 +338,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       }
     }
 
-    if(plotCactus || plotCactusFile) {
+    if(!disableAllPlots && (plotCactus || plotCactusFile)) {
       println
       println("Generating cactus plot")
       Plotting.plotCactus(filteredToolRuns)
