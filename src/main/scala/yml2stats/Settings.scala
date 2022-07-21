@@ -11,6 +11,8 @@ object Settings {
   var printIndividualStats  = true
   var printCombinedResults  = true
 
+  var verbosityLevel        = 1 // 0 : quiet, 1 : print warnings, 2 : print information
+
   // overrides all other plot settings
   var disableAllPlots            = true
 
@@ -39,11 +41,24 @@ object Settings {
     System.getProperty("user.dir") + "/dependencies/kaleido/kaleido"
 
   // exclude benchmarks that could not be processed in *any* of the provided files
-  var excludeErrors         = false
+  var excludeErrors         = true
+  var excludeSolverErrors = true // e.g., do not exclude "Predicate generation failed" kind of errors
+  var excludeIncorrect      = false
+  var considerSolveErrorsUnknown = true
 
   // merge yml files that were run using the same tool name and tool options.
-  var mergeYmlFiles         = true
+  var mergeYmlFiles         = false
   // todo: if runs contain same benchmarks, use the latest results?
+  var ignoreDifferentOptions = false // merge yml files even if options were different
+  var ignoreDifferentOptionsForTools = List("CPAchecker") // merge yml files even if options were different only for these tools (above option needs to be false)
+  var ignoreDifferentNotes   = true
+
+  // instead of merging, results will be combined using the following algorithm with the listed priority:
+  //   - if a benchmark is ERROR   in any of the combined results, result will be ERROR
+  //   - if a benchmark is TIMEOUT in any of the combined results, result will be TIMEOUT
+  //   - if a benchmark is UNSAT   in any of the combined results, result will be UNSAT
+  //   - if a benchmark is SAT     in all of the combined results, result will be SAT
+  var combineResults        = true // mergeYmlFiles needs to be false if this is true
 
   // all of these extensions will be stripped to obtain the base benchmark names
   // this constitutes the basis filenames for comparisons

@@ -92,8 +92,17 @@ object Benchmarks {
                  val timeoutRuns : Seq[RunInfo]) {
     val length      = runs.length
 
-    def getRun(bmBaseName : String) : Option[RunInfo] =
+    val correctRuns =
+      (satRuns ++ unsatRuns).filter(run => run.result == run.expected)
+    val unsoundRuns =
+      satRuns.filter(run => run.expected == False)
+    val incompleteRuns =
+      unsatRuns.filter(run => run.expected == True)
+    def incorrectRuns = unsoundRuns ++ incompleteRuns
+
+    def getRun(bmBaseName : String) : Option[RunInfo] = {
       runs.find(run => run.bmBaseName == bmBaseName)
+    }
 
     private def diffByBaseName (a : Seq[RunInfo],
                                 b : Seq[RunInfo]) : Seq[RunInfo] = {
@@ -123,12 +132,16 @@ object Benchmarks {
     }
 
     override def toString: String = {
-      "sat     : " + satRuns.length + "\n" +
-      "unsat   : " + unsatRuns.length + "\n" +
-      "unknown : " + unknownRuns.length + "\n" +
-      "timeout : " + timeoutRuns.length + "\n" +
-      "error   : " + errorRuns.length + " " + errorsToString + "\n" +
-      "total   : " + runs.length
+      "sat       : " + satRuns.length + "\n" +
+      "unsat     : " + unsatRuns.length + "\n" +
+      "unknown   : " + unknownRuns.length + "\n" +
+      "timeout   : " + timeoutRuns.length + "\n" +
+      "error     : " + errorRuns.length + " " + errorsToString + "\n" +
+      "correct   : " + correctRuns.length + "\n" +
+      "incorrect : " + incorrectRuns.length + "\n" +
+      "  unsound : " + unsoundRuns.length +"\n" +
+      "  incomp. : " + incompleteRuns.length + "\n" +
+      "total     : " + runs.length
     }
   }
 
