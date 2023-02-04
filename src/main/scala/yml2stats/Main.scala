@@ -1,23 +1,39 @@
 package yml2stats
 
-import scala.collection.mutable.{HashSet => MHashSet}
+import scala.collection.mutable.{ArrayBuffer, HashSet => MHashSet}
 import scala.io.Source
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
-import yml2stats.parser.{CPAOutputParser, EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
-import java.util.Date
+import yml2stats.parser.{
+  CPAOutputParser,
+  EldaricaOutputParser,
+  MonoceraExpectedStatusParser,
+  MonoceraOutputParser,
+  SMTExpectedStatusParser,
+  SVExpectedStatusParser,
+  SVOutputParser,
+  ToolOutputParser,
+  Z3OutputParser
+}
 
+import java.util.Date
 import Settings._
+
+import scala.collection.mutable
 
 object Main extends App {
 
-  def printWarning(s : String) = {
-    if(verbosityLevel >= 1)
+  def printWarning(s: String) = {
+    if (verbosityLevel >= 1)
       println(s)
   }
-  def printInfo(s : String) = {
-    if(verbosityLevel >= 2)
+  def printInfo(s: String) = {
+    if (verbosityLevel >= 2)
+      println(s)
+  }
+  def printMoreInfo(s: String) = {
+    if (verbosityLevel >= 3)
       println(s)
   }
 
@@ -33,7 +49,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 """
 
     if (args.length == 0) {
-      println(usage); return
+      println(usage);
+      return
     }
     val arglist = args.toList
     type OptionMap = Map[Symbol, Any]
@@ -59,20 +76,21 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
     val in = new java.io.File(inFileName)
     if (!in.exists) {
-      println(inFileName + " not found!"); return
+      println(inFileName + " not found!");
+      return
     }
 
-    if(in.isDirectory) {
+    if (in.isDirectory) {
       printInfo("Processing all .yml files under " + in + "...")
     }
 
-    val files = in.listFiles().toList
+    val files = in.listFiles(_.isFile).toList
 
 ////////////////////////////////////////////////////////////////////////////////
 // Parse input files and create YAML ASTs
 
     val yamlAsts = for (file <- files if file.getName.endsWith(".yml")) yield {
-      //println(file + "...")
+      printInfo("Processing " + file.getName + "...")
 
       val inFile = Source.fromFile(file)
       val source = inFile.getLines.mkString("\n")
@@ -82,7 +100,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       try {
         (file.getName, source.parseYaml)
       } catch {
-        case _ : Throwable =>
+        case _: Throwable =>
           throw new Exception("Could not parse " + file.getName)
       }
 
@@ -96,370 +114,805 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 ////////////////////////////////////////////////////////////////////////////////
 // Convert YAML ASTs into useful data structures
 
-    val unmergedToolRuns : Seq[(Summary, RunInfos)] =
-      for ((fileName, ast) <- yamlAsts) yield {
+    val unmergedToolRuns: Seq[(Summary, RunInfos)] =
+      (for ((fileName, ast) <- yamlAsts) yield {
         printInfo("Processing " + fileName + "...")
         val (rawSummary, rawRunInfos) =
           ast.convertTo[(SummaryRaw, Seq[RunInfoRaw])]
 
-        val outputParser : ToolOutputParser =
+        printInfo("Parsing tool outputs...")
+        val outputParser: ToolOutputParser =
           rawSummary.toolName match { // todo: maybe another method?
-            case s if s.toLowerCase contains "eld" => EldaricaOutputParser
-            case s if s.toLowerCase contains "z3"  => Z3OutputParser
-            case s if s.toLowerCase contains "cpa" => CPAOutputParser
-            case s => throw new Exception("An output parser for the tool " +
-              s + " is not yet implemented.")
+            case s if s.toLowerCase contains "eld" =>
+              EldaricaOutputParser
+            case s if s.toLowerCase contains "z3" => Z3OutputParser
+            case _ if rawRunInfos.head.bmName.endsWith("yml") =>
+              SVOutputParser
+            case s if s.toLowerCase contains "cpa"      => CPAOutputParser
+            case s if s.toLowerCase contains "monocera" => MonoceraOutputParser
+            case s =>
+              throw new Exception(
+                "An output parser for the tool " +
+                  s + " is not yet implemented.")
           }
 
+        printInfo("Parsing expected status fields...")
         val expectedStatusParser =
           rawSummary.toolName match { // todo: maybe another method?
-            case s if (s.toLowerCase contains "eld") ||
-                      (s.toLowerCase contains "z3") ||
-                      (s.toLowerCase contains "cpa") => // todo: cpa only if it is printed in the same way as SMT expected status
+            case s
+                if (s.toLowerCase contains "eld") ||
+                  (s.toLowerCase contains "z3") ||
+                  (s.toLowerCase contains "cpa") => // todo: cpa only if
+              // it is printed in the same way as SMT expected status
               SMTExpectedStatusParser
+            case s if (s.toLowerCase contains "monocera") =>
+              MonoceraExpectedStatusParser
+            case _ =>
+              SVExpectedStatusParser
           }
 
         val runInfos = RunInfos(for (rawRunInfo <- rawRunInfos) yield {
-          val result = outputParser(rawRunInfo.toolOutput, rawRunInfo.bmName)
+          val result   = outputParser(rawRunInfo.toolOutput, rawRunInfo.bmName)
           val expected = expectedStatusParser(rawRunInfo.expected)
-          RunInfo(rawRunInfo.bmName, expected, result,
-                  rawRunInfo.duration.dropRight(1).toDouble) // todo properly parse duration
+          val categoryName: String = if (categorizeBasedOnDirectory) {
+            // filename is something like .../.../.../directory/benchmark.ext
+            // try to use directory as category name
+            val splitName   = rawRunInfo.bmName.split("/")
+            val categoryInd = splitName.length - 2
+            if (categoryInd < splitName.length && categoryInd >= 0)
+              splitName(categoryInd)
+            else ""
+          } else ""
+          RunInfo(rawRunInfo.bmName,
+                  expected,
+                  result,
+                  rawRunInfo.duration.dropRight(1).toDouble,
+                  categoryName)
+          // todo properly parse duration
         })
         printInfo("done! " + runInfos.length + " runs found.")
-        (Summary(rawSummary, fileName), runInfos)
-      }
+
+        if (categorizeBasedOnDirectory) {
+          printInfo("\nCategorizing files based on directory...")
+          val categorizedRuns =
+            for ((category, runs) <- runInfos.runs.groupBy(_.category))
+              yield (Summary(rawSummary, fileName, category), RunInfos(runs))
+          printInfo(fileName)
+          for ((summary, runs) <- categorizedRuns) {
+            printInfo(summary.category + ": " + runs.length + " runs.")
+          }
+          categorizedRuns
+        } else {
+          Seq((Summary(rawSummary, fileName), runInfos))
+        }
+      }).flatten
 
     if (mergeYmlFiles && combineResults)
-      printWarning("Cannot enable both mergeYmlFiles and combineResults! " +
-        "Defaulting to merging.")
+      printWarning(
+        "Cannot enable both mergeYmlFiles and combineResults! " +
+          "Defaulting to merging.")
 
-    def combineRuns(runs : Seq[(RunInfo, Date)]) : (RunInfo, Date) = {
-      //   - if a benchmark is ERROR   in any of the combined results, result will be ERROR
-      //   - if a benchmark is TIMEOUT in any of the combined results, result will be TIMEOUT
-      //   - if a benchmark is UNSAT   in any of the combined results, result will be UNSAT
-      //   - if a benchmark is SAT     in all of the combined results, result will be SAT
-      //   - if a benchmark is SAT/UNKNOWN in all of the com. results, result will be UNKNOWN
-      runs.find(run => run._1.result.isInstanceOf[Error]) match {
+    def combineRuns(runs: Seq[(RunInfo, Date)]): (RunInfo, Date) = {
+      //   - if a benchmark is UNSAT   in any of the combined results, result
+      //   will be UNSAT
+      //else if a benchmark is TIMEOUT in any of the combined results, result
+      // will be TIMEOUT
+      //else if a benchmark is SAT     in all of the combined results, result
+      // will be SAT
+      //else if a benchmark is ERROR   in any of the combined results, result
+      // will be ERROR
+      //else if a benchmark is UNSAT   in any of the combined results, result
+      // will be UNSAT
+      //else if a benchmark is SAT/UNKNOWN in all of the com. results, result
+      // will be UNKNOWN
+//      runs.foreach(run => println(run._1.result)); println
+      runs.find(run => run._1.result == False) match {
         case Some(run) => run
-        case _ => runs.find(run => run._1.result == Timeout) match {
-          case Some(run) => run
-          case _ => runs.find(run => run._1.result == False) match {
+        case _ =>
+          runs.find(run => run._1.result == Timeout) match {
             case Some(run) => run
             case _ if runs.forall(run => run._1.result == True) =>
               runs.head
-            case _ if runs.forall(run => run._1.result == Unknown || run._1.result == True) =>
+            case _
+                if runs.forall(
+                  run => run._1.result == Unknown || run._1.result == True) =>
               runs.find(run => run._1.result == Unknown).get
+            case _ if runs.forall(run => run._1.result.isInstanceOf[Error]) =>
+              runs.find(run => run._1.result.isInstanceOf[Error]).get
+            case _
+                if runs.forall(run =>
+                  run._1.result == Unknown || run._1.result
+                    .isInstanceOf[Error]) =>
+              runs.find(run => run._1.result == Unknown).get
+            case _
+                if runs.forall(run =>
+                  run._1.result == True || run._1.result
+                    .isInstanceOf[Error]) =>
+              runs.find(run => run._1.result == True).get
+            case _
+                if runs.forall(run =>
+                  run._1.result == False || run._1.result
+                    .isInstanceOf[Error]) =>
+              runs.find(run => run._1.result == False).get
             case _ =>
-              throw new Exception("Cannot combine runs!" + runs.map(run =>
-                run._1.result))
+              throw new Exception(
+                "Cannot combine runs!" + runs.map(run => run._1.result))
           }
-        }
       }
     }
 
-    val toolRuns = if(mergeYmlFiles || combineResults) {
+    val allToolRuns = if (mergeYmlFiles || combineResults) {
       println
       printWarning("Merging files with same tool name and options...")
       val groupedToolRuns =
         if (ignoreDifferentOptions) {
-          unmergedToolRuns.groupBy(p =>
-            p._1.toolName + (if(ignoreDifferentNotes) "" else p._1.notes))
+          unmergedToolRuns.groupBy(
+            p =>
+              p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
+                                               else p._1.notes))
         } else {
-          unmergedToolRuns.groupBy(p =>
-            if(ignoreDifferentOptionsForTools contains p._1.toolName)
-              p._1.toolName + (if(ignoreDifferentNotes) "" else p._1.notes)
-            else
-              p._1.toolName +  " (" + p._1.toolOptions + (if(ignoreDifferentNotes) "" else p._1.notes) + ")")
+          unmergedToolRuns.groupBy(
+            p =>
+              if (ignoreDifferentOptionsForTools
+                    contains p._1.toolName)
+                p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
+                                                 else p._1.notes)
+              else
+                p._1.category + p._1.toolName + " (" +
+                  p._1.toolOptions + (if (ignoreDifferentNotes) ""
+                                      else p._1.notes) + ")")
         }
       for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
         // checks to ensure merged files do not differ in any parameters
         if (toBeMergedRuns.length > 1) {
-          printWarning("\n\tFound " + toBeMergedRuns.length + " file(s) for " + nameAndOpts)
+          printWarning(
+            "\n\tFound " + toBeMergedRuns.length + " file(s) for "
+              + nameAndOpts)
           val summaries = toBeMergedRuns.map(_._1)
           checkIfSameParameters(summaries)
-          val summary = toBeMergedRuns.head._1 // take the summary of the first one
-          val allRunsWithDate = toBeMergedRuns.flatMap(p => p._2.runs zip
-            p._2.runs.indices.map(_ => p._1.startDate))
+          val summary =
+            toBeMergedRuns.head._1 // take the summary of the first one
+          val allRunsWithDate =
+            toBeMergedRuns.flatMap(
+              p =>
+                p._2.runs zip
+                  p._2.runs.indices.map(_ => p._1.startDate))
           val runsGroupedByBmName: Seq[(String, Seq[(RunInfo, Date)])] =
             allRunsWithDate.groupBy(runs => runs._1.bmBaseName).toSeq
-          val uniqueRuns : Seq[RunInfo] =
+          val uniqueRuns: Seq[RunInfo] =
             for ((name, runsWithDate) <- runsGroupedByBmName) yield {
-            if(runsWithDate.length > 1) {
-              val resultRun : (RunInfo, Date) =
-                if (mergeYmlFiles)
-                  runsWithDate.maxBy(p => p._2)
-                else
-                  combineRuns(runsWithDate)
-              printInfo("\tFound " + runsWithDate.length + " benchmarks with the same" +
-                " name (" + name + ") while merging. \n" +
-                "\t\tTaking the one executed on " + resultRun._2 + ".")
-              resultRun._1
-            } else runsWithDate.head._1
-          }
+              if (runsWithDate.length > 1) {
+                val resultRun: (RunInfo, Date) =
+                  if (mergeYmlFiles)
+                    runsWithDate.maxBy(p => p._2)
+                  else
+                    combineRuns(runsWithDate)
+                printMoreInfo(
+                  "\tFound " + runsWithDate.length + " benchmarks" +
+                    " with the same" +
+                    " name (" + name + ") while merging. \n" +
+                    "\t\tTaking the one executed on " + resultRun._2 + ".")
+                resultRun._1
+              } else runsWithDate.head._1
+            }
 
           val runs = RunInfos(uniqueRuns)
 
-          printWarning("\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
+          printWarning(
+            "\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
           (summary, runs)
         } else toBeMergedRuns.head
       }
-    }
-    else unmergedToolRuns
+    } else unmergedToolRuns
 
+    val latexTables          = new mutable.HashMap[String, String]
+    val combinatorialResults = new mutable.HashMap[String, ArrayBuffer[String]]
+
+    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
+
+      combinatorialResults += ((category, new ArrayBuffer[String]))
+
+      println(category)
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
-    if(printFairnessWarnings) {
-      println
-      val summaries = toolRuns.map(_._1)
-      if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
-        printWarning("Runs were executed on systems with different CPU counts!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.cpuCount + " (" + summary.ymlFileName + ")"))
+      if (printFairnessWarnings) {
+        println
+        val summaries = toolRuns.map(_._1)
+        if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
+          printWarning(
+            "Runs were executed on systems with different CPU " +
+              "counts!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.cpuCount + " (" +
+                  summary.ymlFileName + ")"))
+        }
+        if (summaries.exists(
+              s => s.architecture != summaries.head.architecture)) {
+          printWarning(
+            "Runs were executed on systems with different " +
+              "architectures!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.architecture + " ("
+                  + summary.ymlFileName + ")"))
+        }
+        if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
+          printWarning(
+            "Runs were executed on systems with different cpu " +
+              "models!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.cpuModel + " (" +
+                  summary.ymlFileName + ")"))
+        }
+        if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
+          printWarning(
+            "Runs were executed on systems with different total " +
+              "memories!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.memTotal + " (" +
+                  summary.ymlFileName + ")"))
+        }
+        if (summaries.exists(
+              s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
+          printWarning(
+            "Runs were executed on systems with different wall " +
+              "time limits!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.wallTimeLimit + " ("
+                  + summary.ymlFileName + ")"))
+        }
+        if (summaries.exists(
+              s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
+          printWarning(
+            "Runs were executed on systems with different CPU time" +
+              " limits!")
+          summaries.foreach(
+            summary =>
+              printInfo(
+                "\t" + summary.toolName +
+                  ": " +
+                  summary.cpuTimeLimit + " ("
+                  + summary.ymlFileName + ")"))
+        }
       }
-      if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
-        printWarning("Runs were executed on systems with different architectures!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.architecture + " (" + summary.ymlFileName + ")"))
-      }
-      if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
-        printWarning("Runs were executed on systems with different cpu models!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.cpuModel + " (" + summary.ymlFileName + ")"))
-      }
-      if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
-        printWarning("Runs were executed on systems with different total memories!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.memTotal + " (" + summary.ymlFileName + ")"))
-      }
-      if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
-        printWarning("Runs were executed on systems with different wall time limits!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
-      }
-      if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
-        printWarning("Runs were executed on systems with different CPU time limits!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-          summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
-      }
-    }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Printing of individual (for each provided file) statistics
 
-    if (printIndividualStats) {
-      for ((summary, runs) <- toolRuns) {
-        println(summary)
-        println(runs)
-        println
+      if (printIndividualStats) {
+        for ((summary, runs) <- toolRuns) {
+          println(summary)
+          println(runs)
+          println
+        }
       }
-    }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Printing of combined (all provided files) statistics
 
-    // eliminate benchmarks that do not appear in one of the files
+      // eliminate benchmarks that do not appear in one of the files
 
-    val smallestRuns = toolRuns.minBy(pair => pair._2.length)
+      val smallestRuns = toolRuns.minBy(pair => pair._2.length)
 
-    // collect benchmark names that was executed by all tools
-    val commonBenchmarkNames =
-      (for (run <- smallestRuns._2.runs
-           if toolRuns.forall(p => p._2.runs.exists(run2 =>
-             run2.bmBaseName == run.bmBaseName )))
-        yield run.bmBaseName).toSet
+      // collect benchmark names that was executed by all tools
+      val commonBenchmarkNames =
+        (for (run <- smallestRuns._2.runs
+              if toolRuns.forall(p =>
+                p._2.runs.exists(run2 =>
+                  run2.bmBaseName ==
+                    run.bmBaseName)))
+          yield run.bmBaseName).toSet
 
-    println(commonBenchmarkNames.size + " benchmarks were executed by all tools.")
+      println(
+        commonBenchmarkNames.size + " benchmarks were executed by all " +
+          "tools.")
 
-    val errorRunNamesForEachTool : Seq[Seq[String]] =
-      toolRuns.map(p => p._2.errorRuns.filter(run =>
-        if(excludeSolverErrors) // leave only errors without solve errors
-          !run.result.asInstanceOf[Error].errorTypes.contains(ErrorType.Solve)
-        else
-          true // do not exclude anything
-      ).
-        map(_.bmBaseName)).toSeq
-    val combinedErrorRuns : Set[String] =
-      errorRunNamesForEachTool.reduce(_ union _).toSet
-    val commonBenchmarkNamesWithoutErrors : Set[String] =
-      commonBenchmarkNames diff combinedErrorRuns
+      val errorRunNamesForEachTool: Seq[Seq[String]] =
+        toolRuns
+          .map(
+            p =>
+              p._2.errorRuns
+                .filter(
+                  run =>
+                    if (excludeSolverErrors) //
+                      // leave only errors
+                      // without solve errors
+                      !run.result
+                        .asInstanceOf[Error]
+                        .errorTypes
+                        .contains(ErrorType.Solve)
+                    else
+                    true // do not exclude
+                  // anything
+                )
+                .map(_.bmBaseName))
+          .toSeq
+      val combinedErrorRuns: Set[String] =
+        errorRunNamesForEachTool.reduce(_ union _).toSet
+      val commonBenchmarkNamesWithoutErrors: Set[String] =
+        commonBenchmarkNames diff combinedErrorRuns
 
-    println
-    println(commonBenchmarkNamesWithoutErrors.size +
-      " benchmarks had no errors in any of the tools.")
+      //toolRuns.toSeq(6)._2.runs.map(_.bmBaseName).toSet diff
+      // commonBenchmarkNames
 
-    val commonBenchmarkNamesMaybeWithoutErrors =
-      if(excludeErrors) commonBenchmarkNamesWithoutErrors
-      else commonBenchmarkNames
+      println
+      println(
+        commonBenchmarkNamesWithoutErrors.size +
+          " benchmarks had no errors in any of the tools.")
 
-    println
-    println(
-      (if(excludeErrors) "Excluding" else "Including") +
-        " benchmarks that any tool reported an error for in comparisons.\n"
-    )
-    // todo: do not exclude specific types of errors? (e.g., solve)
-    //  alternatively categorize these as "unknown"
+      val commonBenchmarkNamesMaybeWithoutErrors =
+        if (excludeErrors) commonBenchmarkNamesWithoutErrors
+        else commonBenchmarkNames
 
-    val incorrectRunNamesForEachTool : Seq[Seq[String]] =
-      toolRuns.map(p => p._2.incorrectRuns.map(_.bmBaseName)).toSeq
-    val combinedIncorrectRuns : Set[String] =
-      incorrectRunNamesForEachTool.reduce(_ union _).toSet
-    val commonBenchmarkNamesWithoutIncorrect : Set[String] =
-      commonBenchmarkNamesMaybeWithoutErrors diff combinedIncorrectRuns
+      println
+      println(
+        (if (excludeErrors) "Excluding" else "Including") +
+          " benchmarks that any tool reported an error for in comparisons.\n"
+      )
+      // todo: do not exclude specific types of errors? (e.g., solve)
+      //  alternatively categorize these as "unknown"
 
-    println
-    println(commonBenchmarkNamesWithoutIncorrect.size +
-      " benchmarks had no incorrect results in any of the tools.")
-    println
-    println(
-      (if(excludeIncorrect) "Excluding" else "Including") +
-        " benchmarks that any tool returned an incorrect result for in comparisons.\n"
-    )
+      val incorrectRunNamesForEachTool: Seq[Seq[String]] =
+        toolRuns.map(p => p._2.incorrectRuns.map(_.bmBaseName)).toSeq
+      val combinedIncorrectRuns: Set[String] =
+        incorrectRunNamesForEachTool.reduce(_ union _).toSet
+      val commonBenchmarkNamesWithoutIncorrect: Set[String] =
+        commonBenchmarkNamesMaybeWithoutErrors diff combinedIncorrectRuns
 
-    val finalCommonBenchmarkNames =
-      if(excludeIncorrect) commonBenchmarkNamesWithoutIncorrect
-      else commonBenchmarkNamesMaybeWithoutErrors
+      println
+      println(
+        commonBenchmarkNamesWithoutIncorrect.size +
+          " benchmarks had no incorrect results in any of the tools.")
+      println
+      println(
+        (if (excludeIncorrect) "Excluding" else "Including") +
+          " benchmarks that any tool returned an incorrect result for in " +
+          "comparisons.\n"
+      )
 
-    //commonBenchmarkNamesWithoutErrors.foreach(println)
+      val finalCommonBenchmarkNames =
+        if (excludeIncorrect) commonBenchmarkNamesWithoutIncorrect
+        else commonBenchmarkNamesMaybeWithoutErrors
 
-    val filteredToolRuns : Seq[(Summary, RunInfos)] =
-      (for ((summary, runs) <- toolRuns) yield {
-        val filteredRuns = runs.runs.filter(run =>
-          finalCommonBenchmarkNames contains run.bmBaseName
-        )
-        (summary, RunInfos(filteredRuns))
-      }).toSeq
+      //commonBenchmarkNamesWithoutErrors.foreach(println)
 
-    // todo print relevant parts of the summaries of each tool (timeouts etc.)
+      val filteredToolRuns: Seq[(Summary, RunInfos)] =
+        (for ((summary, runs) <- toolRuns) yield {
+          val filteredRuns = runs.runs.filter(
+            run =>
+              finalCommonBenchmarkNames
+                contains run.bmBaseName)
+          (summary, RunInfos(filteredRuns))
+        }).toSeq
 
-    val offset = toolRuns.map(_._1.toolName).maxBy(_.length).length
-    val tabSpaces = 4
-    val columnLabels = Seq("sat(corr.)\t\t", "unsat(corr.)\t", "unknown\t\t", "timeout\t\t", "error\t\t", "correct\t\t", "unsound\t\t", "incomplete\t", "incorrect")
-    val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
-    //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces).floor.toInt) + 1
-    print("\t"*firstTabCount)
-    println(columnLabels.mkString(""))
-    for((summary, runs) <- filteredToolRuns) {
-      val tabsAfterToolName = firstTabCount - (summary.toolName.length.toDouble / tabSpaces).floor.toInt
-      print(summary.toolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
-      val columns = Seq(runs.satRuns.length + "(" + runs.satRuns.diff(runs.unsoundRuns).length + ")",
-        runs.unsatRuns.length + "(" + runs.unsatRuns.diff(runs.incompleteRuns).length + ")",
-        runs.unknownRuns.length, runs.timeoutRuns.length, runs.errorRuns.length,
-        runs.correctRuns.length, runs.unsoundRuns.length,
-        runs.incompleteRuns.length, runs.incorrectRuns.length)
-      println(columns.mkString("\t\t\t"))
-    }
+      val portfolioRuns: Seq[RunInfo] = if (portfolioToolNames.nonEmpty) {
+        val runsInPortfolio =
+          filteredToolRuns.filter {
+            case (summary, _) => portfolioToolNames contains summary.toolName
+          }
+        val runsGroupedByBmName: Map[String, Seq[RunInfo]] =
+          runsInPortfolio.flatMap(p => p._2.runs).groupBy(run => run.bmBaseName)
+
+        // for each run in portfolio, take the first result that is sat/unsat if
+        // others did not report a conflicting result. Set conflicting results
+        // to unknown?
+        // todo: take first returned result instead?
+        (for ((_, runPerTool) <- runsGroupedByBmName) yield {
+          var winningRun: RunInfo = runPerTool.minBy(run => run.duration)
+          for (run <- runPerTool) {
+            run.result match {
+              case True if winningRun.result != False =>
+                winningRun = run
+              case False if winningRun.result != True =>
+                winningRun = run
+              case c
+                  if winningRun.result != True && winningRun.result !=
+                    False =>
+                winningRun = run
+              case c
+                  if c == True && winningRun.result == False ||
+                    c == False && winningRun.result == True => // conflicting
+                // results
+                winningRun = RunInfo(
+                  run.bmName,
+                  run.expected,
+                  Unknown,
+                  runPerTool.maxBy(run => run.duration).duration,
+                  run.category)
+              case _ => // ignore
+            }
+          }
+          winningRun
+        }).toSeq
+      } else Nil
+
+      // todo print relevant parts of the summaries of each tool (timeouts etc.)
+
+      if (printCombinedResults) {
+        val offset = toolRuns
+          .map(runs => runs._1.toolName + runs._1.category)
+          .maxBy(_.length)
+          .length
+        val tabSpaces = 4
+        val columnLabels = Seq("sat(corr.)\t\t",
+                               "unsat(corr.)\t",
+                               "unknown\t\t",
+                               "timeout\t\t",
+                               "error\t\t",
+                               "sat+unsat(corr.)\t",
+                               "unsound\t\t",
+                               "incomplete\t",
+                               "incorrect")
+        val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
+        //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces)
+        // .floor.toInt) + 1
+        println("=" * 80)
+        println(category)
+        println("-" * 80)
+        print("\t" * firstTabCount)
+        println(columnLabels.mkString(""))
+        for ((summary, runs) <- filteredToolRuns) {
+          val firstColText = summary.toolName
+          val tabsAfterToolName = firstTabCount - (firstColText.length.toDouble /
+            tabSpaces).floor.toInt
+          print(firstColText + "\t" * tabsAfterToolName) // todo: print
+          // anything else? notes? version?
+          val columns = Seq(
+            runs.satRuns.length + "(" + runs.satRuns
+              .diff(runs.unsoundRuns)
+              .length + ")",
+            runs.unsatRuns.length + "(" + runs.unsatRuns
+              .diff(runs.incompleteRuns)
+              .length + ")",
+            runs.unknownRuns.length,
+            runs.timeoutRuns.length,
+            runs.errorRuns.length,
+            (runs.satRuns.length + runs.unsatRuns.length) + "" +
+              "(" + runs.correctRuns.length + ")",
+            runs.unsoundRuns.length,
+            runs.incompleteRuns.length,
+            runs.incorrectRuns.length
+          )
+          println(columns.mkString("\t\t\t"))
+        }
+        if (portfolioRuns.nonEmpty) {
+          val toolName = "portfolio"
+          val runs     = RunInfos(portfolioRuns)
+          val tabsAfterToolName = firstTabCount - (toolName.length.toDouble /
+            tabSpaces).floor.toInt
+          print(toolName + "\t" * tabsAfterToolName) // todo: print anything
+          // else? notes? version?
+          val columns = Seq(
+            runs.satRuns.length + "(" + runs.satRuns
+              .diff(runs.unsoundRuns)
+              .length + ")",
+            runs.unsatRuns.length + "(" + runs.unsatRuns
+              .diff(runs.incompleteRuns)
+              .length + ")",
+            runs.unknownRuns.length,
+            runs.timeoutRuns.length,
+            runs.errorRuns.length,
+            (runs.satRuns.length + runs.unsatRuns.length) + "" +
+              "(" + runs.correctRuns.length + ")",
+            runs.unsoundRuns.length,
+            runs.incompleteRuns.length,
+            runs.incorrectRuns.length
+          )
+          println(columns.mkString("\t\t\t"))
+        }
+        println("=" * 80)
+      }
+
+      if (printCombinedResultsLatex) {
+//        println("\nLaTeX table (total count: " + commonBenchmarkNames.size +
+//                ") for " + category +
+//                "\n\n")
+        val headerRow = Seq("&safe&",
+                            "unsafe&",
+                            "unknown&",
+                            "total solved" +
+                              " \\\\\\midrule").mkString("")
+
+        val dataRows =
+          (for ((summary, runs) <- filteredToolRuns.sortBy(runs =>
+                  runs._2.satRuns.length + runs._2.unsatRuns.length)) yield {
+            val firstColumn = summary.toolName + "&" // todo: print anything else?
+            // notes? version?
+            val columns = Seq(
+              runs.satRuns.length,
+              runs.unsatRuns.length,
+              commonBenchmarkNames.size - (runs.satRuns.length + runs.unsatRuns.length),
+              (runs.satRuns.length + runs.unsatRuns.length) + "\\\\"
+            )
+            firstColumn + columns.mkString("&")
+          }).mkString("\n")
+
+        val portfolioRow: String =
+          if (portfolioRuns.nonEmpty) {
+            val firstColumn = "\\emph{portfolio}&"
+            val runs        = RunInfos(portfolioRuns)
+            val columns = Seq(
+              runs.satRuns.length,
+              runs.unsatRuns.length,
+              commonBenchmarkNames.size - (runs.satRuns.length + runs.unsatRuns.length),
+              (runs.satRuns.length + runs.unsatRuns.length) + "\\\\\\midrule"
+            )
+            firstColumn + columns.mkString("&")
+          } else ""
+
+        val latexTableString =
+          s"""\\begin{table}
+             |  \\begin{tabular}{lrrrr}
+             |     $headerRow
+             |     $dataRows
+             |     $portfolioRow
+             |   \\end{tabular}
+             |   \\caption{Results for $category}
+             |   \\label{tbl:${category}-results}
+             | \\end{table}
+            """.stripMargin
+
+        latexTables += ((category, latexTableString))
+      }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Consistency checks
-    {
-      def runsAreConsistent (run1 : RunInfo, run2 : RunInfo) = {
-        run1.result match {
-          case True if run2.result == False => false
-          case False if run2.result == True => false
-          case _ => true
+      {
+        def runsAreConsistent(runPerTool: Seq[(String, RunInfo)]): Boolean = {
+          !(runPerTool.exists(run => run._2.result == True) &&
+            runPerTool.exists(run => run._2.result == False))
         }
-      }
-      var inconsistentCount = 0
-      println
-      for (bmName <- finalCommonBenchmarkNames) {
-        val runPerTool =
-          filteredToolRuns.map{case (summary, toolRuns) =>
-            (summary.toolName ,toolRuns.getRun(bmName).get)}
-        for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
-          if(!runsAreConsistent(run1, run2)) {
+        var inconsistentCount = 0
+        println
+        for (bmName <- finalCommonBenchmarkNames) {
+          val runPerTool =
+            filteredToolRuns.map {
+              case (summary, toolRuns) =>
+                (summary.toolName, toolRuns.getRun(bmName).get)
+            }
+          if (!runsAreConsistent(runPerTool)) {
+            printInfo(
+              runPerTool.head._2.bmBaseName + " does not have " +
+                "consistent results in" +
+                " all tools:\n\t" +
+                runPerTool
+                  .map {
+                    case (tool, run) =>
+                      tool + " (expected: " + run.expected +
+                        ", result: " + run.result + ")"
+                  }
+                  .mkString("\n\t"))
+            println("inconsistent run name: " + bmName)
             inconsistentCount += 1
-            printInfo(run1.bmBaseName + " does not have consistent results in" +
-              " all tools:\n\t" +
-              runPerTool.map{
-                case (tool, run) => tool + " (expected: " + run.expected +
-                  ", result: " + run.result + ")"
-              }.mkString("\n\t"))
           }
         }
+        if (inconsistentCount > 0)
+          printWarning(
+            "Warning: detected " + inconsistentCount + " " +
+              "inconsistent runs!")
+        else
+          printInfo("No inconsistent runs detected!")
       }
-      if(inconsistentCount > 0)
-        printWarning("Warning: detected " + inconsistentCount + " inconsistent runs!")
-      else
-        printInfo("No inconsistent runs detected!")
-    }
 ////////////////////////////////////////////////////////////////////////////////
 
-// Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
-    println
-    for(((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
-      // runs that *only* this tool solved
-      var uniqueDiffRuns = runs
-      for (j <- filteredToolRuns.indices if i != j) {
-        val diffRuns = runs - filteredToolRuns(j)._2 // runs that this tool solved that some other tool could not solve
-        println(summary.toolName + " solved " + diffRuns.satRuns.length + "/" +
-          diffRuns.unsatRuns.length + " that " +
-          filteredToolRuns(j)._1.toolName + " could not solve.")
-        uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
+// Print combinatorial results (i.e., correct results that a tool had an
+// answer for but a subset of others did not )
+      if (printCombinatorialResults) {
+        println
+        for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
+          // runs that *only* this tool solved
+          var uniqueDiffRuns = runs
+          val comparativeText: String =
+            (for (j <- filteredToolRuns.indices if i != j) yield {
+              uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
+              val diffRuns = runs - filteredToolRuns(j)._2 // runs that this
+              // tool solved that some other tool could not solve
+              summary.toolName + " solved " + diffRuns.satRuns.length +
+                "/" +
+                diffRuns.unsatRuns.length + " that " +
+                filteredToolRuns(j)._1.toolName + " could not solve."
+            }).mkString("\\\\\n")
+
+          val overallText: String =
+            summary.toolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
+              uniqueDiffRuns.unsatRuns.length + " that any other tool " +
+              "could not solve."
+
+          combinatorialResults(category) += comparativeText + "\\\\\n " + overallText
+        }
       }
-      println(summary.toolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
-        uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
-      println
+
+      // todo: wip, only here for testing purposes
+      if (!disableAllPlots && (plotDurations || plotDurationsFile) &&
+          filteredToolRuns.length > 1) {
+        println
+        println("Generating durations plots")
+        //if (Settings.produceSinglePlotForAllCategories) {
+        for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
+          Plotting.plotDuratıons(toolRuns1, toolRuns2, Some(category))
+        }
+//        } else {
+//          val categorizedAllRuns = filteredToolRuns.groupBy(_._1.category)
+//          for ((category, runs) <- categorizedAllRuns;
+//            Seq(toolRuns1, toolRuns2) <- runs.combinations(2)) {
+//              Plotting.plotDuratıons(toolRuns1, toolRuns2, Some(category + " - "))
+//            }
+//        }
+      }
+
+      if (!disableAllPlots && (plotCactus || plotCactusFile)) {
+        println
+        println("Generating cactus plot")
+        Plotting.plotCactus(filteredToolRuns ++
+                              Seq(
+                                (Summary("Portfolio",
+                                         "",
+                                         "",
+                                         -1,
+                                         -1,
+                                         "",
+                                         "",
+                                         0,
+                                         "",
+                                         "",
+                                         null,
+                                         "",
+                                         "",
+                                         "",
+                                         ""),
+                                 RunInfos(portfolioRuns))),
+                            Some(category))
+      }
+
+      // Print a list of error benchmarks if printErrorsForEachTool is set
+      if (printComparedRunNames) {
+        println(
+          "Compared run names (basename) (" +
+            filteredToolRuns.head._2.runs.length + " runs)\n" + "-" * 80)
+        filteredToolRuns.head._2.runs.foreach(run => println(run.bmBaseName))
+        println("=" * 80)
+      }
+
+      // Print a list of error benchmarks if printErrorsForEachTool is set
+      if (printErrorsForEachTool) {
+        println("Error runs\n" + "-" * 80)
+        filteredToolRuns.foreach {
+          case (summary, runs) =>
+            println(summary.toolName)
+            runs.errorRuns.foreach(run =>
+              println("  " + run.bmName + ": " + run.result + ")"))
+        }
+        println("=" * 80)
+      }
+      // Print a list of unsound benchmarks if printErrorsForEachTool is set
+      if (printUnsoundForEachTool) {
+        println("Unsound runs\n" + "-" * 80)
+        filteredToolRuns.foreach {
+          case (summary, runs) =>
+            println(summary.toolName)
+            runs.unsoundRuns.foreach(run =>
+              println("  " + run.bmName + ": " + run.result + ")"))
+        }
+        println("=" * 80)
+      }
+      // Print a list of incomplete benchmarks if printErrorsForEachTool is set
+      if (printIncompleteForEachTool) {
+        println("Incomplete runs\n" + "-" * 80)
+        filteredToolRuns.foreach {
+          case (summary, runs) =>
+            println(summary.toolName)
+            runs.incompleteRuns.foreach(run =>
+              println("  " + run.bmName + ": " + run.result + ")"))
+        }
+        println("=" * 80)
+      }
     }
 
-// Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
-    // todo: wip, only here for testing purposes
-    if(!disableAllPlots && (plotDurations || plotDurationsFile) &&
-      filteredToolRuns.length > 1) {
+    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
+      println(s"\\section{$category}")
+      //println(s"\\subsection{${toolRuns._1.toolName}}")
+      println("\\subsection{Overview}")
+      print("\\begin{itemize}\n\\item ")
+      println(toolRuns.map(_._1).mkString("\n\\item "))
+      println("\\end{itemize}")
+      println("\\subsection{Results}")
+      //println(s"\\section{$category Results}")
+      println(latexTables(category))
+      print("\\begin{itemize}\n\\item ")
+      println(combinatorialResults(category).mkString("\n\\item "))
+      println("\\end{itemize}")
+      println(s"See \\autoref{tbl:${category}-results}.")
       println
-      println("Generating durations plots")
-      for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
-        Plotting.plotDuratıons(toolRuns1, toolRuns2)
-      }
-    }
-
-    if(!disableAllPlots && (plotCactus || plotCactusFile)) {
-      println
-      println("Generating cactus plot")
-      Plotting.plotCactus(filteredToolRuns)
     }
   }
-
-  private def checkIfSameParameters(summaries: Seq[Summary]) = {
+  def checkIfSameParameters(summaries: Seq[Summary]) = {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
-      printWarning("\t\tRuns were executed on systems with different CPU counts!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuCount + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different CPU counts!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.cpuCount + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
-      printWarning("\t\tRuns were executed on systems with different architectures!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.architecture + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different architectures!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.architecture + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
-      printWarning("\t\tRuns were executed on systems with different cpu models!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuModel + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different cpu models!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.cpuModel + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
-      printWarning("\t\tRuns were executed on systems with different total memories!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.memTotal + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different total memories!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.memTotal + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
-      printWarning("\t\tRuns were executed on systems with different wall time limits!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
-        summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different wall time limits!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + ": " +
+              summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
-      printWarning("\t\tRuns were executed on systems with different CPU time limits!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed on systems with different CPU time limits!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.toolVersion != summaries.head.toolVersion)) {
-      printWarning("\t\tRuns were executed with different versions of the tool!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.toolVersion + " (" + summary.ymlFileName + ")"))
+      printWarning(
+        "\t\tRuns were executed with different versions of the tool!")
+      summaries.foreach(
+        summary =>
+          printInfo(
+            "\t" + summary.toolName + "(" +
+              summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+              summary.toolVersion + " (" + summary.ymlFileName + ")"))
     }
   }
 }
