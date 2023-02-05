@@ -20,7 +20,7 @@ object Settings {
   var verbosityLevel = 2 // 0 : quiet, 1 : print warnings, 2 : print information, 3 : print even more information
 
   // if true, will try to categorize benchmarks based on their directories
-  var categorizeBasedOnDirectory = true
+  var categorizeBasedOnDirectory = false
 
   // overrides all other plot settings
   var disableAllPlots = true
@@ -66,6 +66,8 @@ object Settings {
   var printUnsoundForEachTool    = false
   var printIncompleteForEachTool = false
   var printComparedRunNames      = false
+
+  var printPerFilenameStats = true
 
   // merge yml files that were run using the same tool name and tool options.
   var mergeYmlFiles = true

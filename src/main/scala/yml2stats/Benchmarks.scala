@@ -93,12 +93,12 @@ object Benchmarks {
   }
 
   // note: runs should be sorted!
-  class RunInfos(val runs:        Seq[RunInfo],
-                 val satRuns:     Seq[RunInfo],
-                 val unsatRuns:   Seq[RunInfo],
-                 val unknownRuns: Seq[RunInfo],
-                 val errorRuns:   Seq[RunInfo],
-                 val timeoutRuns: Seq[RunInfo]) {
+  case class RunInfos(runs:        Seq[RunInfo],
+                      satRuns:     Seq[RunInfo],
+                      unsatRuns:   Seq[RunInfo],
+                      unknownRuns: Seq[RunInfo],
+                      errorRuns:   Seq[RunInfo],
+                      timeoutRuns: Seq[RunInfo]) {
     val length = runs.length
 
     val correctRuns =

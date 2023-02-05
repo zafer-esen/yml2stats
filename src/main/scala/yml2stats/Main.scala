@@ -13,6 +13,7 @@ import yml2stats.parser.{
   SMTExpectedStatusParser,
   SVExpectedStatusParser,
   SVOutputParser,
+  SeaHornOutputParser,
   ToolOutputParser,
   Z3OutputParser
 }
@@ -21,6 +22,7 @@ import java.util.Date
 import Settings._
 
 import scala.collection.mutable
+import scala.language.postfixOps
 
 object Main extends App {
 
@@ -130,6 +132,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
               SVOutputParser
             case s if s.toLowerCase contains "cpa"      => CPAOutputParser
             case s if s.toLowerCase contains "monocera" => MonoceraOutputParser
+            case s if s.toLowerCase contains "seahorn"  => SeaHornOutputParser
             case s =>
               throw new Exception(
                 "An output parser for the tool " +
@@ -146,6 +149,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
               // it is printed in the same way as SMT expected status
               SMTExpectedStatusParser
             case s if (s.toLowerCase contains "monocera") =>
+              MonoceraExpectedStatusParser
+            case s if (s.toLowerCase contains "seahorn") =>
               MonoceraExpectedStatusParser
             case _ =>
               SVExpectedStatusParser
@@ -241,69 +246,71 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       }
     }
 
-    val allToolRuns = if (mergeYmlFiles || combineResults) {
-      println
-      printWarning("Merging files with same tool name and options...")
-      val groupedToolRuns =
-        if (ignoreDifferentOptions) {
-          unmergedToolRuns.groupBy(
-            p =>
-              p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
-                                               else p._1.notes))
-        } else {
-          unmergedToolRuns.groupBy(
-            p =>
-              if (ignoreDifferentOptionsForTools
-                    contains p._1.toolName)
-                p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
-                                                 else p._1.notes)
-              else
-                p._1.category + p._1.toolName + " (" +
-                  p._1.toolOptions + (if (ignoreDifferentNotes) ""
-                                      else p._1.notes) + ")")
-        }
-      for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
-        // checks to ensure merged files do not differ in any parameters
-        if (toBeMergedRuns.length > 1) {
-          printWarning(
-            "\n\tFound " + toBeMergedRuns.length + " file(s) for "
-              + nameAndOpts)
-          val summaries = toBeMergedRuns.map(_._1)
-          checkIfSameParameters(summaries)
-          val summary =
-            toBeMergedRuns.head._1 // take the summary of the first one
-          val allRunsWithDate =
-            toBeMergedRuns.flatMap(
+    val allToolRuns: Iterable[(Summary, RunInfos)]
+      with PartialFunction[Summary with Int, Object] =
+      if (mergeYmlFiles || combineResults) {
+        println
+        printWarning("Merging files with same tool name and options...")
+        val groupedToolRuns =
+          if (ignoreDifferentOptions) {
+            unmergedToolRuns.groupBy(
               p =>
-                p._2.runs zip
-                  p._2.runs.indices.map(_ => p._1.startDate))
-          val runsGroupedByBmName: Seq[(String, Seq[(RunInfo, Date)])] =
-            allRunsWithDate.groupBy(runs => runs._1.bmBaseName).toSeq
-          val uniqueRuns: Seq[RunInfo] =
-            for ((name, runsWithDate) <- runsGroupedByBmName) yield {
-              if (runsWithDate.length > 1) {
-                val resultRun: (RunInfo, Date) =
-                  if (mergeYmlFiles)
-                    runsWithDate.maxBy(p => p._2)
-                  else
-                    combineRuns(runsWithDate)
-                printMoreInfo(
-                  "\tFound " + runsWithDate.length + " benchmarks" +
-                    " with the same" +
-                    " name (" + name + ") while merging. \n" +
-                    "\t\tTaking the one executed on " + resultRun._2 + ".")
-                resultRun._1
-              } else runsWithDate.head._1
-            }
+                p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
+                                                 else p._1.notes))
+          } else {
+            unmergedToolRuns.groupBy(
+              p =>
+                if (ignoreDifferentOptionsForTools
+                      contains p._1.toolName)
+                  p._1.category + p._1.toolName + (if (ignoreDifferentNotes) ""
+                                                   else p._1.notes)
+                else
+                  p._1.category + p._1.toolName + " (" +
+                    p._1.toolOptions + (if (ignoreDifferentNotes) ""
+                                        else p._1.notes) + ")")
+          }
+        for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
+          // checks to ensure merged files do not differ in any parameters
+          if (toBeMergedRuns.length > 1) {
+            printWarning(
+              "\n\tFound " + toBeMergedRuns.length + " file(s) for "
+                + nameAndOpts)
+            val summaries = toBeMergedRuns.map(_._1)
+            checkIfSameParameters(summaries)
+            val summary =
+              toBeMergedRuns.head._1 // take the summary of the first one
+            val allRunsWithDate =
+              toBeMergedRuns.flatMap(
+                p =>
+                  p._2.runs zip
+                    p._2.runs.indices.map(_ => p._1.startDate))
+            val runsGroupedByBmName: Seq[(String, Seq[(RunInfo, Date)])] =
+              allRunsWithDate.groupBy(runs => runs._1.bmBaseName).toSeq
+            val uniqueRuns: Seq[RunInfo] =
+              for ((name, runsWithDate) <- runsGroupedByBmName) yield {
+                if (runsWithDate.length > 1) {
+                  val resultRun: (RunInfo, Date) =
+                    if (mergeYmlFiles)
+                      runsWithDate.maxBy(p => p._2)
+                    else
+                      combineRuns(runsWithDate)
+                  printMoreInfo(
+                    "\tFound " + runsWithDate.length + " benchmarks" +
+                      " with the same" +
+                      " name (" + name + ") while merging. \n" +
+                      "\t\tTaking the one executed on " + resultRun._2 + ".")
+                  resultRun._1
+                } else runsWithDate.head._1
+              }
 
-          val runs = RunInfos(uniqueRuns)
+            val runs = RunInfos(uniqueRuns)
 
-          printWarning(
-            "\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
-          (summary, runs)
-        } else toBeMergedRuns.head
-      }
-    } else unmergedToolRuns
+            printWarning(
+              "\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
+            (summary, runs)
+          } else toBeMergedRuns.head
+        }
+      } else unmergedToolRuns
 
     val latexTables          = new mutable.HashMap[String, String]
     val combinatorialResults = new mutable.HashMap[String, ArrayBuffer[String]]
@@ -825,24 +832,72 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         }
         println("=" * 80)
       }
+
+      if (printPerFilenameStats) {
+        val summaries = filteredToolRuns.map(_._1)
+        val results   = filteredToolRuns.map(_._2)
+
+        val numTools = summaries.size
+
+        val runs = results.map(_.runs.sortBy(_.bmBaseName))
+
+        // print tool names in header row
+        val headerRow = " & " + summaries
+          .map(s => s.toolName)
+          .mkString(" & ") + "\\\\"
+
+        def sanitizeString(s: String): String = {
+          s.replaceAll("_", "\\\\_")
+        }
+
+        // iterate over all results to create a detailed table
+        val dataRows = (for (j <- 0 until results.head.length)
+          yield { // iterate over each benchmark
+            // print benchmark name in first column
+            sanitizeString(runs.head(j).bmBaseName) + " & " +
+              (for (i <- 0 until numTools) yield { // iterate over each tool
+                // then for each tool print result + duration
+                val run = runs(i)(j)
+                assert(run.bmBaseName == runs(0)(j).bmBaseName)
+                run.result + " (" + run.duration + ")"
+              }).mkString(" & ")
+          }).mkString(" \\\\\\midrule\n\t\t")
+
+        val tableFormat = "l" + "r" * numTools
+
+        val latexTableString =
+          s"""\\begin{table}
+             |  \\begin{tabular}{$tableFormat}
+             |     $headerRow\\toprule
+             |     $dataRows\\\\\\bottomrule
+             |   \\end{tabular}
+             |   \\caption{Per benchmark results for all tools}
+             |   \\label{tbl:per-benchmark-results}
+             | \\end{table}
+            """.stripMargin
+
+        println(latexTableString)
+
+      }
+
     }
 
-    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
-      println(s"\\section{$category}")
-      //println(s"\\subsection{${toolRuns._1.toolName}}")
-      println("\\subsection{Overview}")
-      print("\\begin{itemize}\n\\item ")
-      println(toolRuns.map(_._1).mkString("\n\\item "))
-      println("\\end{itemize}")
-      println("\\subsection{Results}")
-      //println(s"\\section{$category Results}")
-      println(latexTables(category))
-      print("\\begin{itemize}\n\\item ")
-      println(combinatorialResults(category).mkString("\n\\item "))
-      println("\\end{itemize}")
-      println(s"See \\autoref{tbl:${category}-results}.")
-      println
-    }
+//    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
+//      println(s"\\section{$category}")
+//      //println(s"\\subsection{${toolRuns._1.toolName}}")
+//      println("\\subsection{Overview}")
+//      print("\\begin{itemize}\n\\item ")
+//      println(toolRuns.map(_._1).mkString("\n\\item "))
+//      println("\\end{itemize}")
+//      println("\\subsection{Results}")
+//      //println(s"\\section{$category Results}")
+//      println(latexTables(category))
+//      print("\\begin{itemize}\n\\item ")
+//      println(combinatorialResults(category).mkString("\n\\item "))
+//      println("\\end{itemize}")
+//      println(s"See \\autoref{tbl:${category}-results}.")
+//      println
+//    }
   }
   def checkIfSameParameters(summaries: Seq[Summary]) = {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
