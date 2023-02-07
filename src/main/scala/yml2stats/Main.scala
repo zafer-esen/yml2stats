@@ -133,6 +133,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
             case s if s.toLowerCase contains "cpa"      => CPAOutputParser
             case s if s.toLowerCase contains "monocera" => MonoceraOutputParser
             case s if s.toLowerCase contains "seahorn"  => SeaHornOutputParser
+            case s if s.toLowerCase contains "tricera"  => MonoceraOutputParser
             case s =>
               throw new Exception(
                 "An output parser for the tool " +
@@ -149,6 +150,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
               // it is printed in the same way as SMT expected status
               SMTExpectedStatusParser
             case s if (s.toLowerCase contains "monocera") =>
+              MonoceraExpectedStatusParser
+            case s if (s.toLowerCase contains "tricera") =>
               MonoceraExpectedStatusParser
             case s if (s.toLowerCase contains "seahorn") =>
               MonoceraExpectedStatusParser
@@ -168,11 +171,17 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
               splitName(categoryInd)
             else ""
           } else ""
+          val extraStats =
+            if (rawRunInfo.toolOutput.exists(line =>
+                  line contains "space sizes"))
+              MonoceraOutputParser.getExtraStats(rawRunInfo.toolOutput)
+            else None
           RunInfo(rawRunInfo.bmName,
                   expected,
                   result,
                   rawRunInfo.duration.dropRight(1).toDouble,
-                  categoryName)
+                  categoryName,
+                  extraStats)
           // todo properly parse duration
         })
         printInfo("done! " + runInfos.length + " runs found.")
@@ -838,48 +847,131 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         val results   = filteredToolRuns.map(_._2)
 
         val numTools = summaries.size
+        val timeout  = summaries.head.wallTimeLimit
 
         val runs = results.map(_.runs.sortBy(_.bmBaseName))
 
+        val svPaths =
+          Util.readRootDirectoriesFromFile("./og_filepaths.txt")
         // print tool names in header row
-        val headerRow = " & " + summaries
-          .map(s => s.toolName)
-          .mkString(" & ") + "\\\\"
-
-        def sanitizeString(s: String): String = {
-          s.replaceAll("_", "\\\\_")
+        def latexName(name: String): String = {
+          name match {
+            case s if s.toLowerCase == "tricera"    => "\\tricera"
+            case s if s.toLowerCase == "cpachecker" => "\\cpachecker"
+            case s if s.toLowerCase == "monocera"   => "\\monocera"
+            case s if s.toLowerCase == "seahorn"    => "\\seahorn"
+            case _                                  => name
+          }
         }
+
+        val headerRow = " & " + summaries
+          .map(s => latexName(s.toolName))
+          .mkString(" & ") + "\\\\"
 
         // iterate over all results to create a detailed table
         val dataRows = (for (j <- 0 until results.head.length)
           yield { // iterate over each benchmark
             // print benchmark name in first column
-            sanitizeString(runs.head(j).bmBaseName) + " & " +
+            val baseName = runs.head(j).bmBaseName
+            val fullName = svPaths get baseName match {
+              case Some(fullPath) => fullPath
+              case None           => baseName
+            }
+            Util.sanitizeString(fullName) + " & " +
               (for (i <- 0 until numTools) yield { // iterate over each tool
                 // then for each tool print result + duration
                 val run = runs(i)(j)
+                //val duration = if (run.duration > 300) 300 else run.duration
+                val res = run.result match { // conver
+                  case e: Error => "Error"
+                  case True    => "\\textbf{\\textcolor{green!50!black}{True}}"
+                  case False   => "Error" // \textcolor{red!90!black}{
+                  case Unknown => "Unknown"
+                  case Timeout => "T/O"
+                }
+                val isTimeout = run.duration >= timeout
+                val duration =
+                  if (isTimeout)
+                    "T/O"
+                  else if (run.duration >= 100)
+                    f"${run.duration}%.0f"
+                  else
+                    f"${run.duration}%.0f"
+
                 assert(run.bmBaseName == runs(0)(j).bmBaseName)
-                run.result + " (" + run.duration + ")"
+                if (isTimeout) duration else res + " (" + duration + ")"
               }).mkString(" & ")
           }).mkString(" \\\\\\midrule\n\t\t")
 
         val tableFormat = "l" + "r" * numTools
 
         val latexTableString =
-          s"""\\begin{table}
-             |  \\begin{tabular}{$tableFormat}
+          s"""% \\begin{table}
+             |  \\begin{longtable}{$tableFormat}
+             |  \\caption{Per benchmark results for all tools. Timeout (T/O)
+             |  is $timeout s.}
+             |   \\label{tbl:per-benchmark-results}\\\\
              |     $headerRow\\toprule
+             | \\endfirsthead
+             |     $headerRow\\toprule
+             | \\endhead
              |     $dataRows\\\\\\bottomrule
-             |   \\end{tabular}
-             |   \\caption{Per benchmark results for all tools}
-             |   \\label{tbl:per-benchmark-results}
-             | \\end{table}
+             |  \\end{longtable}
+             | % \\end{table}
             """.stripMargin
 
         println(latexTableString)
 
       }
 
+      for ((summary, allRuns) <- filteredToolRuns) {
+        val totalLength = allRuns.length
+        val runs        = allRuns.satRuns
+        val n           = runs.length
+        val durations   = runs.map(_.duration)
+        if (durations.nonEmpty) {
+          println(s"Extra stats for ${summary.toolName}")
+          val totalDuration   = durations.sum
+          val minDuration     = durations.min
+          val maxDuration     = durations.max
+          val averageDuration = totalDuration / n
+          val extraStats =
+            runs.map(_.extraStats).filter(_.nonEmpty).map(_.get)
+          val searchSpaceSizes = extraStats.map(_.searchSpaceSize)
+          val searchSpaceSteps = extraStats.map(_.searchSpaceNumSteps)
+
+          val avgSearchSpaceSizes =
+            if (searchSpaceSizes nonEmpty)
+              searchSpaceSizes.map(_.last._2).sum / searchSpaceSizes.length
+            else 0
+          val maxSearchSpaceSize =
+            if (searchSpaceSizes nonEmpty)
+              searchSpaceSizes.map(_.last._2).max
+            else 0
+          val avgSearchSpaceSteps =
+            if (searchSpaceSteps nonEmpty)
+              searchSpaceSteps.map(_.last._2).sum / searchSpaceSteps.length
+            else 0
+          val maxSearchSpaceSteps =
+            if (searchSpaceSizes nonEmpty)
+              searchSpaceSteps.map(_.last._2).max
+            else 0
+          if (durations.nonEmpty) {
+            println(s"#total $totalLength")
+            println(f"""Durations ($n solved)
+                 |  - Average : $averageDuration%.1f s
+                 |  - Min     : $minDuration%.1f s
+                 |  - Max     : $maxDuration%.1f s
+                 |""".stripMargin)
+            if (searchSpaceSizes nonEmpty) {
+              println("Average search space size : " + avgSearchSpaceSizes)
+              println("Max search space size     : " + maxSearchSpaceSize)
+              println("Average num search steps  : " + avgSearchSpaceSteps)
+              println("Max search steps          : " + maxSearchSpaceSteps)
+            }
+          }
+        }
+      }
     }
 
 //    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {

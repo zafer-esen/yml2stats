@@ -405,7 +405,6 @@ object SVOutputParser extends ToolOutputParser {
 }
 
 object MonoceraOutputParser extends ToolOutputParser {
-
   def apply(outputLines: Seq[String], bmName: String): Result = {
     var _isSat         = false
     var _isUnsat       = false
@@ -498,6 +497,42 @@ object MonoceraOutputParser extends ToolOutputParser {
 
     result
 
+  }
+
+  def getExtraStats(outputLines: Seq[String]): Option[ExtraStats] = {
+    var spaceSize:  Option[Map[Int, Int]] = None
+    var spaceSteps: Option[Map[Int, Int]] = None
+    for (line <- outputLines) {
+      line match {
+        case _ if line contains "space sizes" =>
+          val m: Map[Int, Int] =
+            line
+              .dropWhile(_ != '(') // sorry
+              .split("\\),\\(")
+              .map(_.replace("(", ""))
+              .map(_.replace(")", ""))
+              .map(_.split(",").map(_.toInt))
+              .map(pair => pair(0) -> pair(1))
+              .toMap
+          spaceSize = Some(m)
+        case _ if line contains "Search steps" =>
+          val m =
+            line
+              .dropWhile(_ != '(')
+              .split("\\),\\(")
+              .map(_.replace("(", ""))
+              .map(_.replace(")", ""))
+              .map(_.split(",").map(_.toInt))
+              .map(pair => pair(0) -> pair(1))
+              .toMap
+          spaceSteps = Some(m)
+        case _ =>
+        // nothing
+      }
+    }
+    if (spaceSize.nonEmpty && spaceSteps.nonEmpty)
+      Some(ExtraStats(spaceSize.get, spaceSteps.get))
+    else None
   }
 
 }

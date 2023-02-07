@@ -47,11 +47,17 @@ object Benchmarks {
       else ""
   }
 
-  case class RunInfo(bmName:   String,
-                     expected: Result,
-                     result:   Result,
-                     duration: Double,
-                     category: String) {
+  case class ExtraStats(
+      searchSpaceSize:     Map[Int, Int],
+      searchSpaceNumSteps: Map[Int, Int]
+  )
+
+  case class RunInfo(bmName:     String,
+                     expected:   Result,
+                     result:     Result,
+                     duration:   Double,
+                     category:   String,
+                     extraStats: Option[ExtraStats] = None) {
     //name without ext where bmName = dir/bmBaseName.ext
     val bmBaseName: String = {
       if (discardBenchmarkExtensions) {
