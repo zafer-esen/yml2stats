@@ -576,12 +576,13 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           .map(runs => runs._1.toolName + runs._1.category)
           .maxBy(_.length)
           .length
-        val tabSpaces = 4
-        val columnLabels = Seq("sat\t\t\t",
-                               "unsat\t\t",
-                               "unknown\t\t",
+        val tabSpaces = 8 // gedit default is 8 spaces
+        val columnLabels = Seq("sat\t",
+                               "unsat\t",
+                               "unknwn\t",
 //                               "timeout\t\t",
-                               "error\t\t",
+                               "error\t",
+                               "total"
 //                               "sat+unsat(corr.)\t",
 //                               "unsound\t\t",
 //                               "incomplete\t",
@@ -611,13 +612,14 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
             runs.unknownRuns.length + runs.timeoutRuns.length,
 //            runs.timeoutRuns.length,
             runs.errorRuns.length + runs.incorrectRuns.length,
+            runs.length
 //            (runs.satRuns.length + runs.unsatRuns.length) + "" +
 //              "(" + runs.correctRuns.length + ")",
 //            runs.unsoundRuns.length,
 //            runs.incompleteRuns.length,
 //            runs.incorrectRuns.length
           )
-          println(columns.mkString("\t\t\t"))
+          println(columns.mkString("\t"))
         }
         if (portfolioRuns.nonEmpty) {
           val toolName = "portfolio"
