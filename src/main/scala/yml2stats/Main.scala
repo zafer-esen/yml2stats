@@ -582,7 +582,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces)
         // .floor.toInt) + 1
         println("=" * 80)
-        println(category)
+        println(Util.sanitizeString(category))
         println("-" * 80)
         print("\t" * firstTabCount)
         println(columnLabels.mkString(""))
@@ -966,7 +966,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
               searchSpaceSteps.map(_.last._2).max
             else 0
           if (durations.nonEmpty) {
-            println(s"#total $totalLength")
+            println(s"total benchmarks $totalLength")
             println(f"""Durations ($n solved)
                  |  - Average : $averageDuration%.1f s
                  |  - Min     : $minDuration%.1f s
@@ -983,22 +983,22 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       }
     }
 
-//    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
-//      println(s"\\section{$category}")
-//      //println(s"\\subsection{${toolRuns._1.toolName}}")
-//      println("\\subsection{Overview}")
-//      print("\\begin{itemize}\n\\item ")
-//      println(toolRuns.map(_._1).mkString("\n\\item "))
-//      println("\\end{itemize}")
-//      println("\\subsection{Results}")
-//      //println(s"\\section{$category Results}")
-//      println(latexTables(category))
-//      print("\\begin{itemize}\n\\item ")
-//      println(combinatorialResults(category).mkString("\n\\item "))
-//      println("\\end{itemize}")
-//      println(s"See \\autoref{tbl:${category}-results}.")
-//      println
-//    }
+    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
+      println(s"\\section{$category}")
+      //println(s"\\subsection{${toolRuns._1.toolName}}")
+      println("\\subsection{Overview}")
+      print("\\begin{itemize}\n\\item ")
+      println(toolRuns.map(_._1).mkString("\n\\item "))
+      println("\\end{itemize}")
+      println("\\subsection{Results}")
+      //println(s"\\section{$category Results}")
+      println(latexTables(category))
+      print("\\begin{itemize}\n\\item ")
+      println(combinatorialResults(category).mkString("\n\\item "))
+      println("\\end{itemize}")
+      println(s"See \\autoref{tbl:${category}-results}.")
+      println
+    }
   }
   def checkIfSameParameters(summaries: Seq[Summary]) = {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {

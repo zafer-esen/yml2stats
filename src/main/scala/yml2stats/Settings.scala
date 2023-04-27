@@ -9,9 +9,9 @@ object Settings {
 
   var printFairnessWarnings     = true
   var printIndividualStats      = false
-  var printCombinedResults      = true
+  var printCombinedResults      = false
   var printCombinedResultsLatex = true
-  var printCombinatorialResults = true
+  var printCombinatorialResults = false
 
   // if below list is nonempty, they will be used to create a "portfolio" row in
   // the combined results.
