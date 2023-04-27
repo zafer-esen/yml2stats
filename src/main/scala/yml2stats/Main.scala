@@ -36,10 +36,11 @@ object Main extends App {
 
   override def main(args: Array[String]): Unit = {
     val usage =
-      """Usage: yml2stats inFileName | inDirName
+      """Usage: yml2stats [-appendix] inFileName | inDirName
   inFileName      : input file to process
   inDirName       : input directory to process
                     (only files with .yml extension are considered)
+  -appendix       : print the long table in the appendix
 
 e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       an output.
@@ -57,6 +58,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         case Nil => // nothing
         case string :: Nil =>
           inFileName = string
+          parseOptions(list.tail)
+        case option :: _ if option == "-appendix" =>
+          printAppendixTable = true
           parseOptions(list.tail)
         case option :: _ =>
           println("Unknown option: " + option + "\n")
@@ -323,6 +327,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
     val latexTables          = new mutable.HashMap[String, String]
     val combinatorialResults = new mutable.HashMap[String, ArrayBuffer[String]]
 
+    var initializedAppendixTable = false
+    var appendixTableLines : String = ""
+
     for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
 
       combinatorialResults += ((category, new ArrayBuffer[String]))
@@ -582,7 +589,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces)
         // .floor.toInt) + 1
         println("=" * 80)
-        println(Util.sanitizeString(category))
+        println(category)
         println("-" * 80)
         print("\t" * firstTabCount)
         println(columnLabels.mkString(""))
@@ -651,9 +658,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 //        println("\nLaTeX table (total count: " + commonBenchmarkNames.size +
 //                ") for " + category +
 //                "\n\n")
-        val headerRow = Seq("&safe&",
-                            "unsafe&",
-                            "unknown&",
+        val headerRow = Seq("&solved&",
                             "total solved" +
                               " \\\\\\midrule").mkString("")
 
@@ -663,10 +668,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
             val firstColumn = summary.toolName + "&" // todo: print anything else?
             // notes? version?
             val columns = Seq(
-              runs.satRuns.length,
-              runs.unsatRuns.length,
-              commonBenchmarkNames.size - (runs.satRuns.length + runs.unsatRuns.length),
-              (runs.satRuns.length + runs.unsatRuns.length) + "\\\\"
+              runs.correctRuns.length,
+              runs.length + "\\\\"
             )
             firstColumn + columns.mkString("&")
           }).mkString("\n")
@@ -686,13 +689,13 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
         val latexTableString =
           s"""\\begin{table}
-             |  \\begin{tabular}{lrrrr}
+             |  \\begin{tabular}{lrr}
              |     $headerRow
              |     $dataRows
              |     $portfolioRow
              |   \\end{tabular}
-             |   \\caption{Results for $category}
-             |   \\label{tbl:${category}-results}
+             |   \\caption{Results for ${Util.sanitizeString(category)}
+             |   \\label{tbl:${Util.sanitizeString(category)}-results}
              | \\end{table}
             """.stripMargin
 
@@ -914,8 +917,10 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
         val tableFormat = "l" + "r" * numTools
 
-        val latexTableString =
-          s"""% \\begin{table}
+        if(printAppendixTable ) {
+          if (!initializedAppendixTable) {
+            initializedAppendixTable = true
+            appendixTableLines += s"""% \\begin{table}
              |  \\begin{longtable}{$tableFormat}
              |  \\caption{Per benchmark results for all tools. Timeout (T/O)
              |  is $timeout s.}
@@ -923,13 +928,11 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
              |     $headerRow\\toprule
              | \\endfirsthead
              |     $headerRow\\toprule
-             | \\endhead
-             |     $dataRows\\\\\\bottomrule
-             |  \\end{longtable}
-             | % \\end{table}
-            """.stripMargin
-
-        println(latexTableString)
+             |      \\endhead
+             |     """.stripMargin
+          }
+          appendixTableLines += s"$dataRows\\\\\\bottomrule\n"
+        }
 
       }
 
@@ -939,7 +942,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         val n           = runs.length
         val durations   = runs.map(_.duration)
         if (durations.nonEmpty) {
-          println(s"Extra stats for ${summary.toolName}")
+          println(s"Extra stats for ${summary.toolName} ($category)")
           val totalDuration   = durations.sum
           val minDuration     = durations.min
           val maxDuration     = durations.max
@@ -973,6 +976,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
                  |  - Max     : $maxDuration%.1f s
                  |""".stripMargin)
             if (searchSpaceSizes nonEmpty) {
+              println(s"Below values correspond to Inst. space and Inst. steps in Table 3 for $category")
               println("Average search space size : " + avgSearchSpaceSizes)
               println("Max search space size     : " + maxSearchSpaceSize)
               println("Average num search steps  : " + avgSearchSpaceSteps)
@@ -981,24 +985,41 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           }
         }
       }
+
+      println
+      println(s"end of $category")
+      println("="*80)
+      println
+
     }
 
-    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
-      println(s"\\section{$category}")
-      //println(s"\\subsection{${toolRuns._1.toolName}}")
-      println("\\subsection{Overview}")
-      print("\\begin{itemize}\n\\item ")
-      println(toolRuns.map(_._1).mkString("\n\\item "))
-      println("\\end{itemize}")
-      println("\\subsection{Results}")
-      //println(s"\\section{$category Results}")
-      println(latexTables(category))
-      print("\\begin{itemize}\n\\item ")
-      println(combinatorialResults(category).mkString("\n\\item "))
-      println("\\end{itemize}")
-      println(s"See \\autoref{tbl:${category}-results}.")
-      println
+    if(printAppendixTable) {
+      val endString =
+        s"""\\end{longtable}
+           | % \\end{table}
+        """.stripMargin
+      println(appendixTableLines ++ endString)
     }
+
+
+//    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
+//      println(s"\\section{${Util.sanitizeString(category)}}")
+//      //println(s"\\subsection{${toolRuns._1.toolName}}")
+//      println("\\subsection{Overview}")
+//      print("\\begin{itemize}\n\\item ")
+//      println(Util.sanitizeString(toolRuns.map(_._1).mkString("\n\\item ")))
+//      println("\\end{itemize}")
+//      println("\\subsection{Results}")
+//      //println(s"\\section{$category Results}")
+//      println(latexTables(category))
+//      if(printCombinatorialResults) {
+//        print("\\begin{itemize}\n\\item ")
+//        println(combinatorialResults(category).mkString("\n\\item "))
+//        println("\\end{itemize}")
+//      }
+//      println(s"See \\autoref{tbl:${category}-results}.")
+//      println
+//    }
   }
   def checkIfSameParameters(summaries: Seq[Summary]) = {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
