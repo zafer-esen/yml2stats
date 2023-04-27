@@ -8,7 +8,7 @@ object Settings {
   var inFileName = ""
 
   var printFairnessWarnings     = true
-  var printIndividualStats      = true
+  var printIndividualStats      = false
   var printCombinedResults      = true
   var printCombinedResultsLatex = true
   var printCombinatorialResults = true
@@ -17,10 +17,10 @@ object Settings {
   // the combined results.
   var portfolioToolNames = Seq("Eldarica-array", "Z3", "Eldarica")
 
-  var verbosityLevel = 2 // 0 : quiet, 1 : print warnings, 2 : print information, 3 : print even more information
+  var verbosityLevel = 0 // 0 : quiet, 1 : print warnings, 2 : print information, 3 : print even more information
 
   // if true, will try to categorize benchmarks based on their directories
-  var categorizeBasedOnDirectory = false
+  var categorizeBasedOnDirectory = true
 
   // overrides all other plot settings
   var disableAllPlots = true

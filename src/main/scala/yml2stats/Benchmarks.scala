@@ -151,16 +151,18 @@ object Benchmarks {
     }
 
     override def toString: String = {
-      "sat       : " + satRuns.length + "\n" +
-        "unsat     : " + unsatRuns.length + "\n" +
-        "unknown   : " + unknownRuns.length + "\n" +
-        "timeout   : " + timeoutRuns.length + "\n" +
-        "error     : " + errorRuns.length + " " + errorsToString + "\n" +
-        "correct   : " + correctRuns.length + "\n" +
-        "incorrect : " + incorrectRuns.length + "\n" +
-        "  unsound : " + unsoundRuns.length + "\n" +
-        "  incomp. : " + incompleteRuns.length + "\n" +
-        "total     : " + runs.length
+      "sat       : " + (satRuns intersect correctRuns).length + "\n" +
+      "unsat     : " + (unsatRuns intersect correctRuns).length + "\n" +
+      "unknown   : " + (unknownRuns.length + timeoutRuns.length) + "\n" +
+//        "timeout   : " + timeoutRuns.length + "\n" +
+      "error     : " + (incorrectRuns.length + errorRuns.length) ++ " " +
+                      //errorsToString +
+                     "\n" +
+//        "correct   : " + correctRuns.length + "\n" +
+//        "incorrect : " + incorrectRuns.length + "\n" +
+//        "  unsound : " + unsoundRuns.length + "\n" +
+//        "  incomp. : " + incompleteRuns.length + "\n" +
+      "total     : " + runs.length
     }
   }
 

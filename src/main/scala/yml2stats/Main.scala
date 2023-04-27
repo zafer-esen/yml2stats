@@ -2,23 +2,18 @@ package yml2stats
 
 import scala.collection.mutable.{ArrayBuffer, HashSet => MHashSet}
 import scala.io.Source
+import java.io.File
+import java.nio.file.{Files, Path, Paths}
+import java.util.stream.Collectors._
+import scala.collection.JavaConverters._
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
-import yml2stats.parser.{
-  CPAOutputParser,
-  EldaricaOutputParser,
-  MonoceraExpectedStatusParser,
-  MonoceraOutputParser,
-  SMTExpectedStatusParser,
-  SVExpectedStatusParser,
-  SVOutputParser,
-  SeaHornOutputParser,
-  ToolOutputParser,
-  Z3OutputParser
-}
+import yml2stats.parser.{CPAOutputParser, EldaricaOutputParser, MonoceraExpectedStatusParser, MonoceraOutputParser, SMTExpectedStatusParser, SVExpectedStatusParser, SVOutputParser, SeaHornOutputParser, ToolOutputParser, Z3OutputParser}
 
-import java.util.Date
+
+
+import java.util.{Date, stream}
 import Settings._
 
 import scala.collection.mutable
@@ -30,7 +25,7 @@ object Main extends App {
     if (verbosityLevel >= 1)
       println(s)
   }
-  def printInfo(s: String) = {
+  def printInfo(s: String = "") = {
     if (verbosityLevel >= 2)
       println(s)
   }
@@ -82,17 +77,21 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       return
     }
 
-    if (in.isDirectory) {
-      printInfo("Processing all .yml files under " + in + "...")
+    def walkFiles(file : File) : Array[File] = {
+      val curFiles = file.listFiles
+      curFiles ++ curFiles.filter(_.isDirectory).flatMap(walkFiles)
     }
 
-    val files = in.listFiles(_.isFile).toList
+    val files : List[File] = if (in.isDirectory) {
+      printInfo("Processing all .yml files under " + in + "...")
+      walkFiles(in).toList
+    } else in.listFiles(_.isFile).toList
 
 ////////////////////////////////////////////////////////////////////////////////
 // Parse input files and create YAML ASTs
 
     val yamlAsts = for (file <- files if file.getName.endsWith(".yml")) yield {
-      printInfo("Processing " + file.getName + "...")
+      printInfo("Processing " + file + "...")
 
       val inFile = Source.fromFile(file)
       val source = inFile.getLines.mkString("\n")
@@ -100,10 +99,10 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       inFile.close
 
       try {
-        (file.getName, source.parseYaml)
+        (file, source.parseYaml)
       } catch {
         case _: Throwable =>
-          throw new Exception("Could not parse " + file.getName)
+          throw new Exception("Could not parse " + file)
       }
 
     }
@@ -190,14 +189,14 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           printInfo("\nCategorizing files based on directory...")
           val categorizedRuns =
             for ((category, runs) <- runInfos.runs.groupBy(_.category))
-              yield (Summary(rawSummary, fileName, category), RunInfos(runs))
-          printInfo(fileName)
+              yield (Summary(rawSummary, fileName.getName, category), RunInfos(runs))
+          printInfo(fileName.getName)
           for ((summary, runs) <- categorizedRuns) {
             printInfo(summary.category + ": " + runs.length + " runs.")
           }
           categorizedRuns
         } else {
-          Seq((Summary(rawSummary, fileName), runInfos))
+          Seq((Summary(rawSummary, fileName.getName), runInfos))
         }
       }).flatten
 
@@ -328,7 +327,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
       combinatorialResults += ((category, new ArrayBuffer[String]))
 
-      println(category)
+//      println(category)
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
       if (printFairnessWarnings) {
@@ -438,7 +437,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
                     run.bmBaseName)))
           yield run.bmBaseName).toSet
 
-      println(
+      printInfo(
         commonBenchmarkNames.size + " benchmarks were executed by all " +
           "tools.")
 
@@ -470,8 +469,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       //toolRuns.toSeq(6)._2.runs.map(_.bmBaseName).toSet diff
       // commonBenchmarkNames
 
-      println
-      println(
+      printInfo()
+      printInfo(
         commonBenchmarkNamesWithoutErrors.size +
           " benchmarks had no errors in any of the tools.")
 
@@ -479,8 +478,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         if (excludeErrors) commonBenchmarkNamesWithoutErrors
         else commonBenchmarkNames
 
-      println
-      println(
+      printInfo()
+      printInfo(
         (if (excludeErrors) "Excluding" else "Including") +
           " benchmarks that any tool reported an error for in comparisons.\n"
       )
@@ -494,12 +493,12 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       val commonBenchmarkNamesWithoutIncorrect: Set[String] =
         commonBenchmarkNamesMaybeWithoutErrors diff combinedIncorrectRuns
 
-      println
-      println(
+      printInfo()
+      printInfo(
         commonBenchmarkNamesWithoutIncorrect.size +
           " benchmarks had no incorrect results in any of the tools.")
-      println
-      println(
+      printInfo()
+      printInfo(
         (if (excludeIncorrect) "Excluding" else "Including") +
           " benchmarks that any tool returned an incorrect result for in " +
           "comparisons.\n"
@@ -569,15 +568,16 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           .maxBy(_.length)
           .length
         val tabSpaces = 4
-        val columnLabels = Seq("sat(corr.)\t\t",
-                               "unsat(corr.)\t",
+        val columnLabels = Seq("sat\t\t\t",
+                               "unsat\t\t",
                                "unknown\t\t",
-                               "timeout\t\t",
+//                               "timeout\t\t",
                                "error\t\t",
-                               "sat+unsat(corr.)\t",
-                               "unsound\t\t",
-                               "incomplete\t",
-                               "incorrect")
+//                               "sat+unsat(corr.)\t",
+//                               "unsound\t\t",
+//                               "incomplete\t",
+//                               "incorrect")
+                               )
         val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
         //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces)
         // .floor.toInt) + 1
@@ -593,20 +593,20 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           print(firstColText + "\t" * tabsAfterToolName) // todo: print
           // anything else? notes? version?
           val columns = Seq(
-            runs.satRuns.length + "(" + runs.satRuns
+            runs.satRuns
               .diff(runs.unsoundRuns)
-              .length + ")",
-            runs.unsatRuns.length + "(" + runs.unsatRuns
+              .length,
+            runs.unsatRuns
               .diff(runs.incompleteRuns)
-              .length + ")",
-            runs.unknownRuns.length,
-            runs.timeoutRuns.length,
-            runs.errorRuns.length,
-            (runs.satRuns.length + runs.unsatRuns.length) + "" +
-              "(" + runs.correctRuns.length + ")",
-            runs.unsoundRuns.length,
-            runs.incompleteRuns.length,
-            runs.incorrectRuns.length
+              .length,
+            runs.unknownRuns.length + runs.timeoutRuns.length,
+//            runs.timeoutRuns.length,
+            runs.errorRuns.length + runs.incorrectRuns.length,
+//            (runs.satRuns.length + runs.unsatRuns.length) + "" +
+//              "(" + runs.correctRuns.length + ")",
+//            runs.unsoundRuns.length,
+//            runs.incompleteRuns.length,
+//            runs.incorrectRuns.length
           )
           println(columns.mkString("\t\t\t"))
         }
@@ -636,6 +636,15 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           println(columns.mkString("\t\t\t"))
         }
         println("=" * 80)
+        val sameNamedRuns = filteredToolRuns.groupBy(_._1.toolName)
+        for ((toolName, runs) <- sameNamedRuns if runs.length > 1) {
+          println("(in order above) " + toolName +" refers to:")
+          println(runs.map(r => "  " +
+                                r._1.toolName + " (" +
+                                r._1.toolOptions + " started on " +
+                                r._1.startDate +")")
+                      .mkString("\n") + "\n")
+        }
       }
 
       if (printCombinedResultsLatex) {
@@ -717,7 +726,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
                         ", result: " + run.result + ")"
                   }
                   .mkString("\n\t"))
-            println("inconsistent run name: " + bmName)
+            printWarning("inconsistent run name: " + bmName)
             inconsistentCount += 1
           }
         }
