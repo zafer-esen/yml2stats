@@ -36,11 +36,11 @@ object Main extends App {
 
   override def main(args: Array[String]): Unit = {
     val usage =
-      """Usage: yml2stats [-appendix] inFileName | inDirName
+      """Usage: yml2stats [-table5] inFileName | inDirName
   inFileName      : input file to process
   inDirName       : input directory to process
                     (only files with .yml extension are considered)
-  -appendix       : print the long table in the appendix
+  -table5       : print the long table (Table 5) from the appendix
 
 e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       an output.
@@ -59,8 +59,10 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         case string :: Nil =>
           inFileName = string
           parseOptions(list.tail)
-        case option :: _ if option == "-appendix" =>
-          printAppendixTable = true
+        case option :: _ if option == "-table5" =>
+          printTable5 = true
+          printExtraStats = false
+          printCombinedResults = false
           parseOptions(list.tail)
         case option :: _ =>
           println("Unknown option: " + option + "\n")
@@ -917,7 +919,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
         val tableFormat = "l" + "r" * numTools
 
-        if(printAppendixTable ) {
+        if(printTable5 ) {
           if (!initializedAppendixTable) {
             initializedAppendixTable = true
             appendixTableLines += s"""% \\begin{table}
@@ -936,64 +938,67 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
       }
 
-      for ((summary, allRuns) <- filteredToolRuns) {
-        val totalLength = allRuns.length
-        val runs        = allRuns.satRuns
-        val n           = runs.length
-        val durations   = runs.map(_.duration)
-        if (durations.nonEmpty) {
-          println(s"Extra stats for ${summary.toolName} ($category)")
-          val totalDuration   = durations.sum
-          val minDuration     = durations.min
-          val maxDuration     = durations.max
-          val averageDuration = totalDuration / n
-          val extraStats =
-            runs.map(_.extraStats).filter(_.nonEmpty).map(_.get)
-          val searchSpaceSizes = extraStats.map(_.searchSpaceSize)
-          val searchSpaceSteps = extraStats.map(_.searchSpaceNumSteps)
-
-          val avgSearchSpaceSizes =
-            if (searchSpaceSizes nonEmpty)
-              searchSpaceSizes.map(_.last._2).sum / searchSpaceSizes.length
-            else 0
-          val maxSearchSpaceSize =
-            if (searchSpaceSizes nonEmpty)
-              searchSpaceSizes.map(_.last._2).max
-            else 0
-          val avgSearchSpaceSteps =
-            if (searchSpaceSteps nonEmpty)
-              searchSpaceSteps.map(_.last._2).sum / searchSpaceSteps.length
-            else 0
-          val maxSearchSpaceSteps =
-            if (searchSpaceSizes nonEmpty)
-              searchSpaceSteps.map(_.last._2).max
-            else 0
+      if(printExtraStats) {
+        for ((summary, allRuns) <- filteredToolRuns) {
+          val totalLength = allRuns.length
+          val runs        = allRuns.satRuns
+          val n           = runs.length
+          val durations   = runs.map(_.duration)
           if (durations.nonEmpty) {
-            println(s"total benchmarks $totalLength")
-            println(f"""Durations ($n solved)
-                 |  - Average : $averageDuration%.1f s
-                 |  - Min     : $minDuration%.1f s
-                 |  - Max     : $maxDuration%.1f s
-                 |""".stripMargin)
-            if (searchSpaceSizes nonEmpty) {
-              println(s"Below values correspond to Inst. space and Inst. steps in Table 3 for $category")
-              println("Average search space size : " + avgSearchSpaceSizes)
-              println("Max search space size     : " + maxSearchSpaceSize)
-              println("Average num search steps  : " + avgSearchSpaceSteps)
-              println("Max search steps          : " + maxSearchSpaceSteps)
+            println(s"Extra stats for ${summary.toolName} ($category)")
+            val totalDuration    = durations.sum
+            val minDuration      = durations.min
+            val maxDuration      = durations.max
+            val averageDuration  = totalDuration / n
+            val extraStats       =
+              runs.map(_.extraStats).filter(_.nonEmpty).map(_.get)
+            val searchSpaceSizes = extraStats.map(_.searchSpaceSize)
+            val searchSpaceSteps = extraStats.map(_.searchSpaceNumSteps)
+
+            val avgSearchSpaceSizes =
+              if (searchSpaceSizes nonEmpty)
+                searchSpaceSizes.map(_.last._2).sum / searchSpaceSizes.length
+              else 0
+            val maxSearchSpaceSize  =
+              if (searchSpaceSizes nonEmpty)
+                searchSpaceSizes.map(_.last._2).max
+              else 0
+            val avgSearchSpaceSteps =
+              if (searchSpaceSteps nonEmpty)
+                searchSpaceSteps.map(_.last._2).sum / searchSpaceSteps.length
+              else 0
+            val maxSearchSpaceSteps =
+              if (searchSpaceSizes nonEmpty)
+                searchSpaceSteps.map(_.last._2).max
+              else 0
+            if (durations.nonEmpty) {
+              println(s"total benchmarks $totalLength")
+              println(
+                f"""Durations ($n solved)
+                   |  - Average : $averageDuration%.1f s
+                   |  - Min     : $minDuration%.1f s
+                   |  - Max     : $maxDuration%.1f s
+                   |""".stripMargin)
+              if (searchSpaceSizes nonEmpty) {
+                println(s"Below values correspond to Inst. space and Inst. " +
+                        s"steps in Table 3 for $category")
+                println("Average search space size : " + avgSearchSpaceSizes)
+                println("Max search space size     : " + maxSearchSpaceSize)
+                println("Average num search steps  : " + avgSearchSpaceSteps)
+                println("Max search steps          : " + maxSearchSpaceSteps)
+              }
             }
           }
         }
+
+        println
+        println(s"end of $category")
+        println("=" * 80)
+        println
       }
-
-      println
-      println(s"end of $category")
-      println("="*80)
-      println
-
     }
 
-    if(printAppendixTable) {
+    if(printTable5) {
       val endString =
         s"""\\end{longtable}
            | % \\end{table}

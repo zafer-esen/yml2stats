@@ -13,7 +13,8 @@ object Settings {
   var printCombinedResultsLatex = false
   var printCombinatorialResults = false
 
-  var printAppendixTable = false
+  var printTable5     = false
+  var printExtraStats = true
 
   // if below list is nonempty, they will be used to create a "portfolio" row in
   // the combined results.
