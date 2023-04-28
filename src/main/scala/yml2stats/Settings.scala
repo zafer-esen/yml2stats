@@ -76,7 +76,7 @@ object Settings {
   var mergeYmlFiles = true
   // todo: if runs contain same benchmarks, use the latest results?
   var ignoreDifferentOptions         = false // merge yml files even if options were different
-  var ignoreDifferentOptionsForTools = List("CPAchecker") // merge yml files even if options were different only for these tools (above option needs to be false)
+  var ignoreDifferentOptionsForTools = Nil // merge yml files even if options were different only for these tools (above option needs to be false)
   var ignoreDifferentNotes           = true
 
   // instead of merging, results will be combined using the following algorithm with the listed priority:

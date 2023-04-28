@@ -3,9 +3,6 @@ package yml2stats
 import scala.collection.mutable.{ArrayBuffer, HashSet => MHashSet}
 import scala.io.Source
 import java.io.File
-import java.nio.file.{Files, Path, Paths}
-import java.util.stream.Collectors._
-import scala.collection.JavaConverters._
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
@@ -36,11 +33,12 @@ object Main extends App {
 
   override def main(args: Array[String]): Unit = {
     val usage =
-      """Usage: yml2stats [-table5] inFileName | inDirName
+      """Usage: yml2stats [-table5] [-latest] inFileName | inDirName
   inFileName      : input file to process
   inDirName       : input directory to process
                     (only files with .yml extension are considered)
   -table5       : print the long table (Table 5) from the appendix
+  -latest       : take only the latest runs for each tool
 
 e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       an output.
@@ -63,6 +61,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           printTable5 = true
           printExtraStats = false
           printCombinedResults = false
+          parseOptions(list.tail)
+        case option :: _ if option == "-latest" =>
+          ignoreDifferentOptions = true
           parseOptions(list.tail)
         case option :: _ =>
           println("Unknown option: " + option + "\n")
@@ -308,8 +309,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
                       runsWithDate.maxBy(p => p._2)
                     else
                       combineRuns(runsWithDate)
-                  printMoreInfo(
-                    "\tFound " + runsWithDate.length + " benchmarks" +
+                  println(
+                    s"\t (${summary.toolName}/${summary.category}) Found " + runsWithDate.length + " benchmarks" +
                       " with the same" +
                       " name (" + name + ") while merging. \n" +
                       "\t\tTaking the one executed on " + resultRun._2 + ".")
@@ -328,9 +329,6 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
     val latexTables          = new mutable.HashMap[String, String]
     val combinatorialResults = new mutable.HashMap[String, ArrayBuffer[String]]
-
-    var initializedAppendixTable = false
-    var appendixTableLines : String = ""
 
     for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
 
@@ -577,8 +575,8 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           .maxBy(_.length)
           .length
         val tabSpaces = 8 // gedit default is 8 spaces
-        val columnLabels = Seq("sat\t",
-                               "unsat\t",
+        val columnLabels = Seq("safe\t",
+                               "unsafe\t",
                                "unknwn\t",
 //                               "timeout\t\t",
                                "error\t",
@@ -646,10 +644,11 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           )
           println(columns.mkString("\t\t\t"))
         }
-        println("=" * 80)
+        println("-" * 80)
         val sameNamedRuns = filteredToolRuns.groupBy(_._1.toolName)
         for ((toolName, runs) <- sameNamedRuns if runs.length > 1) {
           println("(in order above) " + toolName +" refers to:")
+          println("(use option -latest to ignore earlier runs of the same tool.)")
           println(runs.map(r => "  " +
                                 r._1.toolName + " (" +
                                 r._1.toolOptions + " started on " +
@@ -922,20 +921,20 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         val tableFormat = "l" + "r" * numTools
 
         if(printTable5 ) {
-          if (!initializedAppendixTable) {
-            initializedAppendixTable = true
-            appendixTableLines += s"""% \\begin{table}
+          latexTables += category ->
+            s"""% \\begin{table}
              |  \\begin{longtable}{$tableFormat}
-             |  \\caption{Per benchmark results for all tools. Timeout (T/O)
+             |  \\caption{${Util.sanitizeString(category)} benchmarks. Timeout (T/O)
              |  is $timeout s.}
              |   \\label{tbl:per-benchmark-results}\\\\
              |     $headerRow\\toprule
              | \\endfirsthead
              |     $headerRow\\toprule
              |      \\endhead
-             |     """.stripMargin
-          }
-          appendixTableLines += s"$dataRows\\\\\\bottomrule\n"
+             |     $dataRows\\\\\\bottomrule"\\\\
+             | \\end{longtable}
+             | % \\end{table}
+             |""".stripMargin
         }
 
       }
@@ -947,6 +946,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           val n           = runs.length
           val durations   = runs.map(_.duration)
           if (durations.nonEmpty) {
+            println("-"*80)
             println(s"Extra stats for ${summary.toolName} ($category)")
             val totalDuration    = durations.sum
             val minDuration      = durations.min
@@ -974,22 +974,28 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
                 searchSpaceSteps.map(_.last._2).max
               else 0
             if (durations.nonEmpty) {
-              println(s"total benchmarks $totalLength")
+//              println(s"total benchmarks $totalLength")
               println(
                 f"""Durations ($n solved)
                    |  - Average : $averageDuration%.1f s
                    |  - Min     : $minDuration%.1f s
-                   |  - Max     : $maxDuration%.1f s
-                   |""".stripMargin)
+                   |  - Max     : $maxDuration%.1f s""".stripMargin)
               if (searchSpaceSizes nonEmpty) {
-                println(s"Below values correspond to Inst. space and Inst. " +
-                        s"steps in Table 3 for $category")
+                println(s"\nBelow values correspond to Inst. space and Inst. " +
+                        s"steps in Table 3 for $category)")
                 println("Average search space size : " + avgSearchSpaceSizes)
                 println("Max search space size     : " + maxSearchSpaceSize)
                 println("Average num search steps  : " + avgSearchSpaceSteps)
                 println("Max search steps          : " + maxSearchSpaceSteps)
               }
+              println("-" * 80)
+              println
             }
+          }
+          else {
+            println("-"*80)
+            println(s"No extra stats printed for ${summary.toolName} because it could not solve any instances.")
+            println("-"*80)
           }
         }
 
@@ -1000,14 +1006,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       }
     }
 
-    if(printTable5) {
-      val endString =
-        s"""\\end{longtable}
-           | % \\end{table}
-        """.stripMargin
-      println(appendixTableLines ++ endString)
+    for ((category, table) <- latexTables.toSeq.sortBy(_._1)) {
+      println(table)
     }
-
 
 //    for ((category, toolRuns) <- allToolRuns.groupBy(_._1.category)) {
 //      println(s"\\section{${Util.sanitizeString(category)}}")
