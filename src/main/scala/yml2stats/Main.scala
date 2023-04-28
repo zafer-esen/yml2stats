@@ -39,6 +39,7 @@ object Main extends App {
                     (only files with .yml extension are considered)
   -table5       : print the long table (Table 5) from the appendix
   -latest       : take only the latest runs for each tool
+  -nocat        : do not categorize based on original directory (needed for original benchmarks)
 
 e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       an output.
@@ -61,6 +62,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           printTable5 = true
           printExtraStats = false
           printCombinedResults = false
+          parseOptions(list.tail)
+        case option :: _ if option == "-nocat" =>
+          categorizeBasedOnDirectory = false
           parseOptions(list.tail)
         case option :: _ if option == "-latest" =>
           ignoreDifferentOptions = true
