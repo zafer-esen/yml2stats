@@ -1,5 +1,3 @@
-import Dependencies._
-
 ThisBuild / scalaVersion     := "2.12.8"
 ThisBuild / version          := "0.1.0-SNAPSHOT"
 ThisBuild / organization     := "com.example"
@@ -8,7 +6,7 @@ ThisBuild / organizationName := "example"
 lazy val root = (project in file("."))
   .settings(
     name := "yml2stats",
-    libraryDependencies += scalaTest % Test,
+    libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test",
     libraryDependencies += "net.jcazevedo" %% "moultingyaml" % "0.4.2",
     libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2",
     libraryDependencies += "org.plotly-scala" %% "kaleido" % "0.1.0" // kaleido bindings for scala for generating images in png, svg etc.
