@@ -862,8 +862,21 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       }
 
       if (printPerFilenameStats) {
-        val summaries = filteredToolRuns.map(_._1)
-        val results   = filteredToolRuns.map(_._2)
+        def latexColOrder(name : String) : Int = {
+          name match {
+            case s if s.toLowerCase == "tricera"    => 3
+            case s if s.toLowerCase == "cpachecker" => 1
+            case s if s.toLowerCase == "monocera"   => 4
+            case s if s.toLowerCase == "seahorn"    => 2
+            case _                                  => 0
+          }
+        }
+
+        val filteredToolRunsSorted = filteredToolRuns.sortBy(
+          runs => latexColOrder(runs._1.toolName))
+
+        val summaries = filteredToolRunsSorted.map(_._1)
+        val results   = filteredToolRunsSorted.map(_._2)
 
         val numTools = summaries.size
         val timeout  = summaries.head.wallTimeLimit
@@ -875,10 +888,10 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         // print tool names in header row
         def latexName(name: String): String = {
           name match {
-            case s if s.toLowerCase == "tricera"    => "\\tricera"
-            case s if s.toLowerCase == "cpachecker" => "\\cpachecker"
-            case s if s.toLowerCase == "monocera"   => "\\monocera"
-            case s if s.toLowerCase == "seahorn"    => "\\seahorn"
+            case s if s.toLowerCase == "tricera"    => "\\tri"
+            case s if s.toLowerCase == "cpachecker" => "\\cpa"
+            case s if s.toLowerCase == "monocera"   => "\\monoc"
+            case s if s.toLowerCase == "seahorn"    => "\\sea"
             case _                                  => name
           }
         }
@@ -928,14 +941,14 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
           latexTables += category ->
             s"""% \\begin{table}
              |  \\begin{longtable}{$tableFormat}
-             |  \\caption{${Util.sanitizeString(category)} benchmarks. Timeout (T/O)
-             |  is $timeout s.}
+             |  \\caption{\\emph{${Util.sanitizeString(category)}} benchmark
+             |  results for all tools. Timeout (T/O) is $timeout s.}
              |   \\label{tbl:per-benchmark-results}\\\\
              |     $headerRow\\toprule
              | \\endfirsthead
              |     $headerRow\\toprule
              |      \\endhead
-             |     $dataRows\\\\\\bottomrule"\\\\
+             |     $dataRows\\\\\\bottomrule\\\\
              | \\end{longtable}
              | % \\end{table}
              |""".stripMargin
