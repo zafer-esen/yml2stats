@@ -10,8 +10,10 @@ object Settings {
   var printFairnessWarnings = true
   var printIndividualStats  = true
   var printCombinedResults  = true
+  var printUnsoundRuns      = true
+  var printIncompleteRuns   = true
 
-  var verbosityLevel        = 1 // 0 : quiet, 1 : print warnings, 2 : print information
+  var verbosityLevel        = 2 // 0 : quiet, 1 : print warnings, 2 : print information
 
   // overrides all other plot settings
   var disableAllPlots            = true
@@ -26,6 +28,8 @@ object Settings {
   var plotDurationsHeight        = 640
   var plotDurationsShowDiagonal  = true
   var plotDurationsShowDiagonalExplanations = true // also requires diagonal to be shown
+  var plotDurationsTreatUnknownAsTimeout = true
+  var plotDurationsUseResultInsteadOfExpected = true // safe to do when there are no conflicts
 
   var plotCactus            = true
   var plotCactusFile         = true
@@ -41,8 +45,8 @@ object Settings {
     System.getProperty("user.dir") + "/dependencies/kaleido/kaleido"
 
   // exclude benchmarks that could not be processed in *any* of the provided files
-  var excludeErrors         = true
-  var excludeSolverErrors = true // e.g., do not exclude "Predicate generation failed" kind of errors
+  var excludeErrors         = false
+  var excludeSolverErrors = false // e.g., do not exclude "Predicate generation failed" kind of errors
   var excludeIncorrect      = false
   var considerSolveErrorsUnknown = true
 
@@ -51,7 +55,7 @@ object Settings {
   // todo: if runs contain same benchmarks, use the latest results?
   var ignoreDifferentOptions = false // merge yml files even if options were different
   var ignoreDifferentOptionsForTools = List("CPAchecker") // merge yml files even if options were different only for these tools (above option needs to be false)
-  var ignoreDifferentNotes   = true
+  var ignoreDifferentNotes   = false
 
   // instead of merging, results will be combined using the following algorithm with the listed priority:
   //   - if a benchmark is ERROR   in any of the combined results, result will be ERROR

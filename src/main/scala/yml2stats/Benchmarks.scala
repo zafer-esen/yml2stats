@@ -93,7 +93,8 @@ object Benchmarks {
     val length      = runs.length
 
     val correctRuns =
-      (satRuns ++ unsatRuns).filter(run => run.result == run.expected)
+      (satRuns ++ unsatRuns).filter(run => run.result == run.expected
+                                           || run.expected == Unknown)
     val unsoundRuns =
       satRuns.filter(run => run.expected == False)
     val incompleteRuns =
@@ -179,8 +180,9 @@ object Benchmarks {
                      scriptDir     : String,
                      notes         : String,
                      ymlFileName   : String) {
+    def fullToolName = s"$toolName (${if (ignoreDifferentNotes) "" else notes})"
     override def toString: String =
-      toolName + " (" + toolVersion + ") on " + startDate +
+      toolName + " (" + toolOptions + ") on " + startDate +
         (if(notes.nonEmpty) (" (" + notes + ")") else "") +
         " (" + ymlFileName + ")"
   }

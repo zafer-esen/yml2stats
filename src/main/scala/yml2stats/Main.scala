@@ -1,14 +1,14 @@
 package yml2stats
 
-import scala.collection.mutable.{HashSet => MHashSet}
 import scala.io.Source
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
 import yml2stats.parser.{CPAOutputParser, EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
-import java.util.Date
 
+import java.util.Date
 import Settings._
+import org.apache.logging.log4j.core.Filter.Result
 
 object Main extends App {
 
@@ -162,14 +162,13 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       printWarning("Merging files with same tool name and options...")
       val groupedToolRuns =
         if (ignoreDifferentOptions) {
-          unmergedToolRuns.groupBy(p =>
-            p._1.toolName + (if(ignoreDifferentNotes) "" else p._1.notes))
+          unmergedToolRuns.groupBy(p => p._1.fullToolName)
         } else {
           unmergedToolRuns.groupBy(p =>
             if(ignoreDifferentOptionsForTools contains p._1.toolName)
-              p._1.toolName + (if(ignoreDifferentNotes) "" else p._1.notes)
+              p._1.fullToolName
             else
-              p._1.toolName +  " (" + p._1.toolOptions + (if(ignoreDifferentNotes) "" else p._1.notes) + ")")
+              s"${p._1.fullToolName} (${p._1.toolOptions})")
         }
       for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
         // checks to ensure merged files do not differ in any parameters
@@ -213,32 +212,32 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       val summaries = toolRuns.map(_._1)
       if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
         printWarning("Runs were executed on systems with different CPU counts!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.cpuCount + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
         printWarning("Runs were executed on systems with different architectures!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.architecture + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
         printWarning("Runs were executed on systems with different cpu models!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.cpuModel + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
         printWarning("Runs were executed on systems with different total memories!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.memTotal + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
         printWarning("Runs were executed on systems with different wall time limits!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
         printWarning("Runs were executed on systems with different CPU time limits!")
-        summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+        summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
           summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
       }
     }
@@ -331,16 +330,16 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
     // todo print relevant parts of the summaries of each tool (timeouts etc.)
 
-    val offset = toolRuns.map(_._1.toolName).maxBy(_.length).length
+    val offset = toolRuns.map(_._1.fullToolName).maxBy(_.length).length
     val tabSpaces = 4
     val columnLabels = Seq("sat(corr.)\t\t", "unsat(corr.)\t", "unknown\t\t", "timeout\t\t", "error\t\t", "correct\t\t", "unsound\t\t", "incomplete\t", "incorrect")
     val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
     //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces).floor.toInt) + 1
     print("\t"*firstTabCount)
     println(columnLabels.mkString(""))
-    for((summary, runs) <- filteredToolRuns) {
-      val tabsAfterToolName = firstTabCount - (summary.toolName.length.toDouble / tabSpaces).floor.toInt
-      print(summary.toolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
+    for((summary, runs) <- filteredToolRuns.sortBy(_._1.fullToolName)) {
+      val tabsAfterToolName = firstTabCount - (summary.fullToolName.length.toDouble / tabSpaces).floor.toInt
+      print(summary.fullToolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
       val columns = Seq(runs.satRuns.length + "(" + runs.satRuns.diff(runs.unsoundRuns).length + ")",
         runs.unsatRuns.length + "(" + runs.unsatRuns.diff(runs.incompleteRuns).length + ")",
         runs.unknownRuns.length, runs.timeoutRuns.length, runs.errorRuns.length,
@@ -348,6 +347,26 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         runs.incompleteRuns.length, runs.incorrectRuns.length)
       println(columns.mkString("\t\t\t"))
     }
+
+////////////////////////////////////////////////////////////////////////////////
+// Printing of unsound and incomplete results for each tool run
+    for((summary, runs) <- filteredToolRuns) {
+      if(runs.incorrectRuns nonEmpty) {
+        println
+        println("Incorrect results for " + summary.fullToolName)
+      }
+      if(runs.unsoundRuns nonEmpty) {
+        println("Unsound (expected unsat, got sat)")
+        runs.unsoundRuns.foreach(run => println(s"${run.bmName} (${run.duration} s)"))
+        println
+      }
+      if (runs.incompleteRuns nonEmpty) {
+        println("Incomplete (expected sat, got unsat)")
+        runs.incompleteRuns.foreach(run => println(s"${run.bmName} (${run.duration} s)"))
+        println
+      }
+    }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Consistency checks
@@ -364,7 +383,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       for (bmName <- finalCommonBenchmarkNames) {
         val runPerTool =
           filteredToolRuns.map{case (summary, toolRuns) =>
-            (summary.toolName ,toolRuns.getRun(bmName).get)}
+            (summary.fullToolName ,toolRuns.getRun(bmName).get)}
         for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
           if(!runsAreConsistent(run1, run2)) {
             inconsistentCount += 1
@@ -391,15 +410,29 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       var uniqueDiffRuns = runs
       for (j <- filteredToolRuns.indices if i != j) {
         val diffRuns = runs - filteredToolRuns(j)._2 // runs that this tool solved that some other tool could not solve
-        println(summary.toolName + " solved " + diffRuns.satRuns.length + "/" +
+        println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
           diffRuns.unsatRuns.length + " that " +
-          filteredToolRuns(j)._1.toolName + " could not solve.")
+          filteredToolRuns(j)._1.fullToolName + " could not solve.")
+        if(diffRuns.satRuns.nonEmpty) {
+          println("  sat")
+          diffRuns.satRuns.foreach{run =>
+            println(s"    ${run.bmBaseName}")
+          }
+        }
+        if (diffRuns.unsatRuns.nonEmpty) {
+          println("  unsat")
+          diffRuns.unsatRuns.foreach{run =>
+            println(s"    ${run.bmBaseName}")
+          }
+        }
         uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
       }
-      println(summary.toolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
+      println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
         uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
       println
     }
+
+    // alloc(h1, o1) = (h2, a2) & read(h2, a2) = o2
 
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
     // todo: wip, only here for testing purposes
@@ -407,8 +440,35 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       filteredToolRuns.length > 1) {
       println
       println("Generating durations plots")
+
+      val toolRunsWithExpectedInfo = if (plotDurationsUseResultInsteadOfExpected) {
+        // use runs with most results
+        filteredToolRuns.maxBy(_._2.correctRuns.size)
+      } else {
+        filteredToolRuns.find(_._2.runs.exists(
+          r => r.expected != Unknown)).getOrElse(filteredToolRuns.head)
+      }
+
+      def isExpectedSat(run : RunInfo) : Boolean = {
+        val comp = if (plotDurationsUseResultInsteadOfExpected) run.result else run.expected
+        comp == True
+      }
+      def isExpectedUnsat(run : RunInfo) : Boolean = {
+        val comp = if (plotDurationsUseResultInsteadOfExpected) run.result else run.expected
+        comp == False
+      }
+      def isExpectedUnknown(run : RunInfo) : Boolean = {
+        val comp = if (plotDurationsUseResultInsteadOfExpected) run.result else run.expected
+        comp == Unknown
+      }
+
+      val expSatNames =  toolRunsWithExpectedInfo._2.runs.filter(isExpectedSat).map(_.bmBaseName)
+      val expUnsatNames = toolRunsWithExpectedInfo._2.runs.filter(isExpectedUnsat).map(_.bmBaseName)
+      val expUnknownNames = toolRunsWithExpectedInfo._2.runs.filter(isExpectedUnknown).map(_.bmBaseName)
+
       for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
-        Plotting.plotDuratıons(toolRuns1, toolRuns2)
+        Plotting.plotDuratıons(
+          toolRuns1, toolRuns2, expSatNames, expUnsatNames, expUnknownNames)
       }
     }
 
@@ -422,42 +482,42 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
   private def checkIfSameParameters(summaries: Seq[Summary]) = {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
       printWarning("\t\tRuns were executed on systems with different CPU counts!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.cpuCount + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
       printWarning("\t\tRuns were executed on systems with different architectures!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.architecture + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
       printWarning("\t\tRuns were executed on systems with different cpu models!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.cpuModel + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
       printWarning("\t\tRuns were executed on systems with different total memories!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.memTotal + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
       printWarning("\t\tRuns were executed on systems with different wall time limits!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + ": " +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
         summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
       printWarning("\t\tRuns were executed on systems with different CPU time limits!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.toolVersion != summaries.head.toolVersion)) {
       printWarning("\t\tRuns were executed with different versions of the tool!")
-      summaries.foreach(summary => printInfo("\t" + summary.toolName + "(" +
+      summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
         summary.toolVersion + ")" + " on " + summary.startDate + ": " +
         summary.toolVersion + " (" + summary.ymlFileName + ")"))
     }

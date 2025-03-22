@@ -45,7 +45,7 @@ object Plotting {
 //          withSize(4).
 //          withLine(Line().withColor(Color.StringColor(getNextColor)))
 //        ).
-        withName((toolRuns._1.toolName + " (" +toolRuns._1.toolVersion + ")").toHtml).
+        withName((toolRuns._1.fullToolName + " (" +toolRuns._1.toolVersion + ")").toHtml).
         withLine(Line().
           withColor(Color.StringColor(getNextColor)).
           withShape(LineShape.Linear))
@@ -71,8 +71,11 @@ object Plotting {
     }
   }
 
-  def plotDuratıons(toolRunInfo1 : (Summary, RunInfos),
-                    toolRunInfo2 : (Summary, RunInfos)) = {
+  def plotDuratıons(toolRunInfo1    : (Summary, RunInfos),
+                    toolRunInfo2    : (Summary, RunInfos),
+                    expSatNames     : Seq[String],
+                    expUnsatNames   : Seq[String],
+                    expUnknownNames : Seq[String]) = {
     if (assertsOn) {
       // passed run infos should be of same length and cotnain the same (base)-
       //   named benchmarks
@@ -83,12 +86,16 @@ object Plotting {
       }
     }
 
-    val expSatNames = toolRunInfo1._2.runs.filter(run => run.expected == True).map(_.bmBaseName)
-    val expUnsatNames = toolRunInfo1._2.runs.filter(run => run.expected == False).map(_.bmBaseName)
-    val expUnknownNames = toolRunInfo1._2.runs.filter(run => run.expected == Unknown).map(_.bmBaseName)
-
-    val tool1Durations = toolRunInfo1._2.runs.map(run => run.bmBaseName -> run.duration).toMap
-    val tool2Durations = toolRunInfo2._2.runs.map(run => run.bmBaseName -> run.duration).toMap
+    val tool1Durations = toolRunInfo1._2.runs.map {
+      run => run.bmBaseName -> (run.result match {
+        case Unknown if plotDurationsTreatUnknownAsTimeout => toolRunInfo1._1.wallTimeLimit
+        case _ => run.duration
+      })}.toMap
+    val tool2Durations = toolRunInfo2._2.runs.map {
+      run => run.bmBaseName -> (run.result match {
+        case Unknown if plotDurationsTreatUnknownAsTimeout => toolRunInfo2._1.wallTimeLimit
+        case _ => run.duration
+      })}.toMap
 
     val tool1ExpSatDurations = for (name <- expSatNames) yield tool1Durations(name)
     val tool1ExpUnsatDurations = for (name <- expUnsatNames) yield tool1Durations(name)
@@ -98,6 +105,7 @@ object Plotting {
     val tool2ExpUnsatDurations = for (name <- expUnsatNames) yield tool2Durations(name)
     val tool2ExpUnknownDurations = for (name <- expUnknownNames) yield tool2Durations(name)
 
+    implicit def hex2int (hex: String): Int = Integer.parseInt(hex, 16)
     val trace1 = Scatter().
       withX(tool1ExpSatDurations).
       withY(tool2ExpSatDurations).
@@ -126,7 +134,7 @@ object Plotting {
       withText(expUnknownNames).
       withMode(ScatterMode(ScatterMode.Markers)).
       withMarker(Marker(
-        color = Color.RGB(255,255,0), // yellow
+        color = Color.RGB("80","3E","75"), // purple
         symbol = plotDurationsMarkerSymbol,
         size = plotDurationsMarkerSize)).
       withName("Expected unknown".toHtml)
@@ -146,14 +154,14 @@ object Plotting {
     val text1 = Scatter().
       withX(Seq(toolRunInfo1._1.wallTimeLimit/3)).
       withY(Seq(toolRunInfo2._1.wallTimeLimit*2/3)).
-      withText(toolRunInfo1._1.toolName +
+      withText(toolRunInfo1._1.fullToolName +
         (" (" + toolRunInfo1._1.toolVersion + ")<br>is faster").toHtml).
       withMode(ScatterMode(ScatterMode.Text)).withName("").withShowlegend(false)
 
     val text2 = Scatter().
       withX(Seq(toolRunInfo1._1.wallTimeLimit*2/3)).
       withY(Seq(toolRunInfo2._1.wallTimeLimit/3)).
-      withText(toolRunInfo2._1.toolName +
+      withText(toolRunInfo2._1.fullToolName +
         (" (" + toolRunInfo2._1.toolVersion + ")<br>is faster").toHtml).
       withMode(ScatterMode(ScatterMode.Text)).withName("").withShowlegend(false)
 
@@ -172,9 +180,9 @@ object Plotting {
 //      plot_bgcolor = Color.RGB(254, 247, 234),
       hovermode = HoverMode.Closest//,
     ).withXaxis(Axis().withTitle(
-      (toolRunInfo1._1.toolName + " (" + toolRunInfo1._1.toolVersion + ")").toHtml)).
+      (toolRunInfo1._1.fullToolName + " (" + toolRunInfo1._1.toolVersion + ")").toHtml)).
       withYaxis(Axis().withTitle(
-        (toolRunInfo2._1.toolName + " (" + toolRunInfo2._1.toolVersion + ")").toHtml))
+        (toolRunInfo2._1.fullToolName + " (" + toolRunInfo2._1.toolVersion + ")").toHtml))
 
 
     val data =
@@ -186,7 +194,7 @@ object Plotting {
     if (plotDurationsFile) {
       plotToFile(data,
         name = plotDurationsPdfNamePrefix + "_" +
-        toolRunInfo1._1.toolName + "_" + toolRunInfo2._1.toolName,
+        toolRunInfo1._1.fullToolName + "_" + toolRunInfo2._1.fullToolName,
         layout, plotDurationsWidth, plotDurationsHeight, plotDurationsFileScale)
     }
 
