@@ -7,13 +7,21 @@ object Settings {
   // default args
   var inFileName = ""
 
-  var printFairnessWarnings = true
-  var printIndividualStats  = true
+  var printFairnessWarnings = false
+  var printIndividualStats  = false
   var printCombinedResults  = true
   var printUnsoundRuns      = true
   var printIncompleteRuns   = true
+  var printSummaryLatex     = true
+  var printDetailedLatex    = true
+  var printCombinatorialResults = false
 
-  var verbosityLevel        = 2 // 0 : quiet, 1 : print warnings, 2 : print information
+  var doTable5Text = false  // Summary table, text format
+  var doTable6Text = false  // Detailed table, text format
+  var doTable5Tex = false   // Summary table, LaTeX format
+  var doTable6Tex = false   // Detailed table, LaTeX format
+
+  var verbosityLevel        = 0 // 0 : quiet, 1 : print warnings, 2 : print information
 
   // overrides all other plot settings
   var disableAllPlots            = true
@@ -48,7 +56,9 @@ object Settings {
   var excludeErrors         = false
   var excludeSolverErrors = false // e.g., do not exclude "Predicate generation failed" kind of errors
   var excludeIncorrect      = false
-  var considerSolveErrorsUnknown = true
+  var considerSolveErrorsUnknown = false
+  var considerOutOfMemErrorUnknown = false
+  var considerKilledAsTimeout = true
 
   // merge yml files that were run using the same tool name and tool options.
   var mergeYmlFiles         = false

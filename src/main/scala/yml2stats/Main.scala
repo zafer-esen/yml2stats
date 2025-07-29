@@ -4,8 +4,7 @@ import scala.io.Source
 import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
-import yml2stats.parser.{CPAOutputParser, EldaricaOutputParser, SMTExpectedStatusParser, ToolOutputParser, Z3OutputParser}
-
+import yml2stats.parser._
 import java.util.Date
 import Settings._
 import org.apache.logging.log4j.core.Filter.Result
@@ -21,35 +20,225 @@ object Main extends App {
       println(s)
   }
 
+  private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("\n--- Summary Table ---")
+    // Sort rows by notes (encoding name) and then tool name
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+
+    val header = Seq("Tool", "Safe (corr)", "Unsafe (corr)", "Unknown", "Total")
+    val data = sortedRuns.map { case (summary, r) =>
+      val safeStr = s"${r.satRuns.length} (${r.satRuns.diff(r.unsoundRuns).length})"
+      val unsafeStr = s"${r.unsatRuns.length} (${r.unsatRuns.diff(r.incompleteRuns).length})"
+      val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
+      val totalStr = s"${r.runs.length}"
+      Seq(summary.fullToolName, safeStr, unsafeStr, unknownStr, totalStr)
+    }
+
+    val allRows = header +: data
+    val colWidths = allRows.transpose.map(col => col.map(_.length).max)
+
+    def pad(s: String, width: Int) = s.padTo(width, ' ')
+
+    println(header.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
+    println(colWidths.map(w => "-" * w).mkString("-|-"))
+
+    data.foreach { row =>
+      println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
+    }
+  }
+
+  // NEW: Helper function for the detailed table (text format)
+  private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("\n--- Detailed Per-Benchmark Results ---")
+    // Sort columns by notes (encoding name) and then tool name
+    val orderedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val summaries = orderedRuns.map(_._1)
+    val results = orderedRuns.map(_._2)
+
+    if (results.isEmpty) {
+      println("No results to display.")
+      return
+    }
+
+    val allBenchmarkNames = results.flatMap(_.runs.map(_.bmBaseName)).distinct.sorted
+    val bmColWidth = (allBenchmarkNames :+ "Benchmark").map(_.length).max
+    val toolHeaders = (1 to summaries.size).map(i => s"($i)").mkString(" ")
+    println(s"${"Benchmark".padTo(bmColWidth, ' ')} | $toolHeaders")
+    println(s"${"-" * bmColWidth}-+-${"-" * toolHeaders.length}")
+
+    val runMap = orderedRuns.flatMap { case (summary, runInfos) =>
+      runInfos.runs.map(r => (summary.fullToolName, r.bmBaseName) -> r)
+    }.toMap
+
+    for (bmName <- allBenchmarkNames) {
+      val bmNamePadded = bmName.padTo(bmColWidth, ' ')
+      val resultString = summaries.map { summary =>
+        runMap.get((summary.fullToolName, bmName)) match {
+          case Some(run) => run.result match {
+            case True    => "T"
+            case False   => "F"
+            case _       => "U" // Unknown, Timeout, Error all map to U
+          }
+          case None => " " // This benchmark wasn't run by this tool
+        }
+      }.map(s => s" ${s} ").mkString("")
+      println(s"$bmNamePadded |$resultString")
+    }
+
+    println("\nLegend:")
+    summaries.zipWithIndex.foreach { case (summary, i) =>
+      println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
+    }
+  }
+
+  // NEW: Helper function for the summary table (LaTeX format)
+  private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val headerRow = "Tool & Safe (correct) & Unsafe (correct) & Unknown & Total \\\\ \\midrule"
+    val dataRows = sortedRuns.map { case (summary, r) =>
+      val safeTotal = r.satRuns.length
+      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
+      val unsafeTotal = r.unsatRuns.length
+      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
+      val total = r.runs.length
+      val toolName = summary.fullToolName.replace("_", "\\_")
+      s"$toolName & $safeTotal ($safeCorrect) & $unsafeTotal ($unsafeCorrect) & $unknown & $total \\\\"
+    }.mkString("\n")
+    val latexTableString =
+      s"""\\begin{table}[h]
+         |  \\centering
+         |  \\caption{Combined Results Summary}
+         |  \\label{tbl:combined-results-summary}
+         |  \\begin{tabular}{lrrrr}
+         |    \\toprule
+         |    $headerRow
+         |    $dataRows \\\\
+         |    \\bottomrule
+         |  \\end{tabular}
+         |\\end{table}
+         |""".stripMargin
+    println(latexTableString)
+  }
+
+  // NEW: Helper function for the detailed table (LaTeX format)
+  private def printTable6LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("% For this table, please include the following packages in your " +
+            "LaTeX preamble:\n\\usepackage{rotating}" +
+            "\n\\usepackage{booktabs}\n\\usepackage{longtable}" +
+            "\n\\usepackage{xcolor}\n")
+    val orderedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val summaries = orderedRuns.map(_._1)
+    val results = orderedRuns.map(_._2)
+    val numTools = summaries.size
+
+    val headerItems = summaries.map { s =>
+      val toolLabel = (s.toolName.take(3) + " " + s.notes).replace("_", "\\_")
+      s"\\rotatebox{90}{$toolLabel}"
+    }
+    val headerRow = "Benchmark & " + headerItems.mkString(" & ") + " \\\\ \\toprule"
+
+    val allBenchmarkNames = results.flatMap(_.runs.map(_.bmBaseName)).distinct.sorted
+    val runMap = orderedRuns.flatMap { case (summary, runInfos) =>
+      runInfos.runs.map(r => (summary.fullToolName, r.bmBaseName) -> r)
+    }.toMap
+
+    val dataRows = allBenchmarkNames.map { bmName =>
+      val benchmarkName = Util.sanitizeString(bmName)
+      val rowData = summaries.map { summary =>
+        runMap.get(summary.fullToolName, bmName) match {
+          case Some(run) =>
+            var res = run.result match {
+              case True    => "T"
+              case False   => "F"
+              case _       => "U"
+            }
+            if (run.result == run.expected && (run.result == True || run.result == False)) {
+              res = s"\\textbf{\\textcolor{green!50!black}{${res}}}"
+            } else if (run.expected != Unknown && (run.result == True || run.result == False)) {
+              res = s"\\underline{\\textbf{\\textcolor{red!50!black}{${res}}}}"
+            }
+            s" & $res"
+          case None => " & "
+        }
+      }.mkString("")
+      s"$benchmarkName$rowData \\\\"
+    }.mkString("\n")
+
+    val longtableString =
+      s"""\\begin{longtable}{l${"c" * numTools}}
+         |\\caption{Per benchmark results}\\label{tbl:per-benchmark-results}\\\\
+         |$headerRow
+         |\\endfirsthead
+         |$headerRow
+         |\\endhead
+         |\\bottomrule
+         |\\endlastfoot
+         |$dataRows
+         |\\end{longtable}
+         |""".stripMargin
+    println(longtableString)
+  }
+
   override def main(args: Array[String]): Unit = {
     val usage =
-      """Usage: yml2stats inFileName | inDirName
-  inFileName      : input file to process
-  inDirName       : input directory to process
-                    (only files with .yml extension are considered)
+      """|Usage: yml2stats [options] inFileName | inDirName
+         |
+         |Processes .yml files from benchmark runs and generates summary tables.
+         |
+         |inFileName      : A single .yml input file to process.
+         |inDirName       : A directory containing .yml files to process.
+         |
+         |Options:
+         |  -table6       : Print detailed per-benchmark results in text format.
+         |  -table5tex    : Print summary table in LaTeX format.
+         |  -table6tex    : Print detailed per-benchmark results in LaTeX format.
+         |
+         |Default (no options): Print the summary table in text format.
+         |""".stripMargin
 
-e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
-      an output.
-"""
-
-    if (args.length == 0) {
+    val arglist = args.toList
+    if (args.length == 0 || arglist.contains("-h") || arglist.contains("--help")) {
       println(usage); return
     }
-    val arglist = args.toList
-    type OptionMap = Map[Symbol, Any]
 
-    def parseOptions(list: List[String]): Unit = {
-      list match {
-        case Nil => // nothing
-        case string :: Nil =>
-          inFileName = string
-          parseOptions(list.tail)
-        case option :: _ =>
-          println("Unknown option: " + option + "\n")
+    var remainingArgs = arglist
+    while (remainingArgs.nonEmpty) {
+      remainingArgs match {
+        case "-table5tex" :: tail =>
+          doTable5Tex = true
+          remainingArgs = tail
+        case "-table6tex" :: tail =>
+          doTable6Tex = true
+          remainingArgs = tail
+        case "-table6" :: tail =>
+          doTable6Text = true
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-") =>
+          println(s"Unknown option: $opt\n")
+          println(usage)
+          return
+        case path :: tail =>
+          if (inFileName.nonEmpty) {
+            println("Error: More than one input file/directory specified.\n")
+            println(usage)
+            return
+          }
+          inFileName = path
+          remainingArgs = tail
       }
     }
 
-    parseOptions(arglist)
+    // Determine default action: if no specific table option is given, print summary in text.
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text) {
+      doTable5Text = true
+    }
+
+    // Determine default action: if no specific table option is given, print summary in text.
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text) {
+      doTable5Text = true
+    }
 
     if (inFileName.isEmpty) {
       println("An input filename must be provided.\n")
@@ -62,14 +251,13 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
       println(inFileName + " not found!"); return
     }
 
-    if(in.isDirectory) {
+    val files = if (in.isDirectory) {
       printInfo("Processing all .yml files under " + in + "...")
+      val fileList = in.listFiles()
+      if (fileList != null) fileList.toList else List.empty
+    } else {
+      List(in)
     }
-
-    val files = in.listFiles().toList
-
-////////////////////////////////////////////////////////////////////////////////
-// Parse input files and create YAML ASTs
 
     val yamlAsts = for (file <- files if file.getName.endsWith(".yml")) yield {
       //println(file + "...")
@@ -102,21 +290,26 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
         val (rawSummary, rawRunInfos) =
           ast.convertTo[(SummaryRaw, Seq[RunInfoRaw])]
 
-        val outputParser : ToolOutputParser =
-          rawSummary.toolName match { // todo: maybe another method?
-            case s if s.toLowerCase contains "eld" => EldaricaOutputParser
-            case s if s.toLowerCase contains "z3"  => Z3OutputParser
-            case s if s.toLowerCase contains "cpa" => CPAOutputParser
-            case s => throw new Exception("An output parser for the tool " +
-              s + " is not yet implemented.")
+        val outputParser: ToolOutputParser =
+          rawSummary.toolName match {
+            case s if s.toLowerCase contains "eld"       => EldaricaOutputParser
+            case s if s.toLowerCase contains "z3"        => Z3OutputParser
+            case s if s.toLowerCase contains "cpa"       => CPAOutputParser
+            case s if s.toLowerCase contains "sea"       => SeaHornOutputParser
+            case s if s.toLowerCase contains "tri"       => TriCeraOutputParser
+            case s if s.toLowerCase contains "predator"  => SVOutputParser
+            case s => throw new Exception("An output parser for the tool " + s + " is not yet implemented.")
           }
 
         val expectedStatusParser =
-          rawSummary.toolName match { // todo: maybe another method?
-            case s if (s.toLowerCase contains "eld") ||
-                      (s.toLowerCase contains "z3") ||
-                      (s.toLowerCase contains "cpa") => // todo: cpa only if it is printed in the same way as SMT expected status
+          rawSummary.toolName match {
+            case s if (s.toLowerCase contains "eld") || (s.toLowerCase contains "z3") =>
               SMTExpectedStatusParser
+            case s if (s.toLowerCase contains "tri") ||
+                      (s.toLowerCase contains "sea") ||
+                      (s.toLowerCase contains "predator") ||
+                      (s.toLowerCase contains "cpa") =>
+              TriCeraExpectedStatusParser
           }
 
         val runInfos = RunInfos(for (rawRunInfo <- rawRunInfos) yield {
@@ -267,7 +460,7 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
              run2.bmBaseName == run.bmBaseName )))
         yield run.bmBaseName).toSet
 
-    println(commonBenchmarkNames.size + " benchmarks were executed by all tools.")
+    printInfo(commonBenchmarkNames.size + " benchmarks were executed by all tools.")
 
     val errorRunNamesForEachTool : Seq[Seq[String]] =
       toolRuns.map(p => p._2.errorRuns.filter(run =>
@@ -282,16 +475,14 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
     val commonBenchmarkNamesWithoutErrors : Set[String] =
       commonBenchmarkNames diff combinedErrorRuns
 
-    println
-    println(commonBenchmarkNamesWithoutErrors.size +
+    printInfo(commonBenchmarkNamesWithoutErrors.size +
       " benchmarks had no errors in any of the tools.")
 
     val commonBenchmarkNamesMaybeWithoutErrors =
       if(excludeErrors) commonBenchmarkNamesWithoutErrors
       else commonBenchmarkNames
 
-    println
-    println(
+    printInfo(
       (if(excludeErrors) "Excluding" else "Including") +
         " benchmarks that any tool reported an error for in comparisons.\n"
     )
@@ -305,11 +496,9 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
     val commonBenchmarkNamesWithoutIncorrect : Set[String] =
       commonBenchmarkNamesMaybeWithoutErrors diff combinedIncorrectRuns
 
-    println
-    println(commonBenchmarkNamesWithoutIncorrect.size +
+    printInfo(commonBenchmarkNamesWithoutIncorrect.size +
       " benchmarks had no incorrect results in any of the tools.")
-    println
-    println(
+    printInfo(
       (if(excludeIncorrect) "Excluding" else "Including") +
         " benchmarks that any tool returned an incorrect result for in comparisons.\n"
     )
@@ -330,39 +519,80 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 
     // todo print relevant parts of the summaries of each tool (timeouts etc.)
 
-    val offset = toolRuns.map(_._1.fullToolName).maxBy(_.length).length
-    val tabSpaces = 4
-    val columnLabels = Seq("sat(corr.)\t\t", "unsat(corr.)\t", "unknown\t\t", "timeout\t\t", "error\t\t", "correct\t\t", "unsound\t\t", "incomplete\t", "incorrect")
-    val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
-    //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces).floor.toInt) + 1
-    print("\t"*firstTabCount)
-    println(columnLabels.mkString(""))
-    for((summary, runs) <- filteredToolRuns.sortBy(_._1.fullToolName)) {
-      val tabsAfterToolName = firstTabCount - (summary.fullToolName.length.toDouble / tabSpaces).floor.toInt
-      print(summary.fullToolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
-      val columns = Seq(runs.satRuns.length + "(" + runs.satRuns.diff(runs.unsoundRuns).length + ")",
-        runs.unsatRuns.length + "(" + runs.unsatRuns.diff(runs.incompleteRuns).length + ")",
-        runs.unknownRuns.length, runs.timeoutRuns.length, runs.errorRuns.length,
-        runs.correctRuns.length, runs.unsoundRuns.length,
-        runs.incompleteRuns.length, runs.incorrectRuns.length)
-      println(columns.mkString("\t\t\t"))
+//    val offset = toolRuns.map(_._1.fullToolName).maxBy(_.length).length
+//    val tabSpaces = 4
+//    val columnLabels = Seq("sat(corr.)\t\t", "unsat(corr.)\t", "unknown\t\t", "timeout\t\t", "error\t\t", "correct\t\t", "unsound\t\t", "incomplete\t", "incorrect")
+//    val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
+//    //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces).floor.toInt) + 1
+//    print("\t"*firstTabCount)
+//    println(columnLabels.mkString(""))
+//    for((summary, runs) <- filteredToolRuns.sortBy(_._1.fullToolName)) {
+//      val tabsAfterToolName = firstTabCount - (summary.fullToolName.length.toDouble / tabSpaces).floor.toInt
+//      print(summary.fullToolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
+//      val columns = Seq(runs.satRuns.length + "(" + runs.satRuns.diff(runs.unsoundRuns).length + ")",
+//        runs.unsatRuns.length + "(" + runs.unsatRuns.diff(runs.incompleteRuns).length + ")",
+//        runs.unknownRuns.length, runs.timeoutRuns.length, runs.errorRuns.length,
+//        runs.correctRuns.length, runs.unsoundRuns.length,
+//        runs.incompleteRuns.length, runs.incorrectRuns.length)
+//      println(columns.mkString("\t\t\t"))
+//    }
+
+    if (printCombinatorialResults) {
+    // Print combinatorial results
+      println
+      for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
+      var uniqueDiffRuns = runs
+      for (j <- filteredToolRuns.indices if i != j) {
+        val diffRuns = runs - filteredToolRuns(j)._2
+        println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
+                diffRuns.unsatRuns.length + " that " + filteredToolRuns(j)._1.fullToolName + " could not solve.")
+        if (diffRuns.satRuns.nonEmpty) {
+          println("  sat")
+          diffRuns.satRuns.foreach { run =>
+            println(s"    ${run.bmBaseName}")
+          }
+        }
+        if (diffRuns.unsatRuns.nonEmpty) {
+          println("  unsat")
+          diffRuns.unsatRuns.foreach { run =>
+            println(s"    ${run.bmBaseName}")
+          }
+        }
+        uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
+      }
+      println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
+              uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
+      println
+    }
     }
 
-////////////////////////////////////////////////////////////////////////////////
-// Printing of unsound and incomplete results for each tool run
-    for((summary, runs) <- filteredToolRuns) {
-      if(runs.incorrectRuns nonEmpty) {
-        println
-        println("Incorrect results for " + summary.fullToolName)
+    if (doTable5Text) {
+      printTable5TextFormat(filteredToolRuns)
+    }
+    if (doTable6Text) {
+      printTable6TextFormat(filteredToolRuns)
+    }
+    if (doTable5Tex) {
+      printTable5LatexFormat(filteredToolRuns)
+    }
+    if (doTable6Tex) {
+      printTable6LatexFormat(filteredToolRuns)
+    }
+    // --- End of LaTeX Table Printing ---
+
+    // Printing of unsound and incomplete results for each tool run
+    for ((summary, runs) <- filteredToolRuns) {
+      if (runs.incorrectRuns nonEmpty) {
+        printInfo("\nIncorrect results for " + summary.fullToolName)
       }
       if(runs.unsoundRuns nonEmpty) {
-        println("Unsound (expected unsat, got sat)")
-        runs.unsoundRuns.foreach(run => println(s"${run.bmName} (${run.duration} s)"))
+        printInfo("\nUnsound (expected unsat, got sat)")
+        runs.unsoundRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
         println
       }
       if (runs.incompleteRuns nonEmpty) {
-        println("Incomplete (expected sat, got unsat)")
-        runs.incompleteRuns.foreach(run => println(s"${run.bmName} (${run.duration} s)"))
+        printInfo("\nIncomplete (expected sat, got unsat)")
+        runs.incompleteRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
         println
       }
     }
@@ -404,34 +634,35 @@ e.g., "yml2stats /path/to/dir" will collect all .yml files in dir and produce
 ////////////////////////////////////////////////////////////////////////////////
 
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
-    println
-    for(((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
-      // runs that *only* this tool solved
-      var uniqueDiffRuns = runs
-      for (j <- filteredToolRuns.indices if i != j) {
-        val diffRuns = runs - filteredToolRuns(j)._2 // runs that this tool solved that some other tool could not solve
-        println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
-          diffRuns.unsatRuns.length + " that " +
-          filteredToolRuns(j)._1.fullToolName + " could not solve.")
-        if(diffRuns.satRuns.nonEmpty) {
-          println("  sat")
-          diffRuns.satRuns.foreach{run =>
-            println(s"    ${run.bmBaseName}")
-          }
-        }
-        if (diffRuns.unsatRuns.nonEmpty) {
-          println("  unsat")
-          diffRuns.unsatRuns.foreach{run =>
-            println(s"    ${run.bmBaseName}")
-          }
-        }
-        uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
-      }
-      println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
-        uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
+    if(printCombinatorialResults) {
       println
+      for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
+        // runs that *only* this tool solved
+        var uniqueDiffRuns = runs
+        for (j <- filteredToolRuns.indices if i != j) {
+          val diffRuns = runs - filteredToolRuns(j)._2 // runs that this tool solved that some other tool could not solve
+          println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
+                  diffRuns.unsatRuns.length + " that " +
+                  filteredToolRuns(j)._1.fullToolName + " could not solve.")
+          if (diffRuns.satRuns.nonEmpty) {
+            println("  sat")
+            diffRuns.satRuns.foreach{run =>
+              println(s"    ${run.bmBaseName}")
+            }
+          }
+          if (diffRuns.unsatRuns.nonEmpty) {
+            println("  unsat")
+            diffRuns.unsatRuns.foreach{run =>
+              println(s"    ${run.bmBaseName}")
+            }
+          }
+          uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
+        }
+        println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
+                uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
+        println
+      }
     }
-
     // alloc(h1, o1) = (h2, a2) & read(h2, a2) = o2
 
 // Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
