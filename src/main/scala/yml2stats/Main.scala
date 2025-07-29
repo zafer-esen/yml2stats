@@ -47,7 +47,6 @@ object Main extends App {
     }
   }
 
-  // NEW: Helper function for the detailed table (text format)
   private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("\n--- Detailed Per-Benchmark Results ---")
     // Sort columns by notes (encoding name) and then tool name
@@ -91,7 +90,6 @@ object Main extends App {
     }
   }
 
-  // NEW: Helper function for the summary table (LaTeX format)
   private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
@@ -122,7 +120,6 @@ object Main extends App {
     println(latexTableString)
   }
 
-  // NEW: Helper function for the detailed table (LaTeX format)
   private def printTable6LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include the following packages in your " +
             "LaTeX preamble:\n\\usepackage{rotating}" +
@@ -181,6 +178,138 @@ object Main extends App {
     println(longtableString)
   }
 
+  private def printTable5SimpleTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("\n--- Simple Summary Table ---")
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+
+    val header = Seq("Tool", "Safe", "Unsafe", "Incorrect", "Unknown", "Total")
+    val data = sortedRuns.map { case (summary, r) =>
+      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
+      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val incorrect = r.incorrectRuns.length
+      val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
+      val totalStr = s"${r.runs.length}"
+      Seq(summary.fullToolName, safeCorrect.toString, unsafeCorrect.toString, incorrect.toString, unknownStr, totalStr)
+    }
+
+    val allRows = header +: data
+    val colWidths = allRows.transpose.map(col => col.map(_.length).max)
+
+    def pad(s: String, width: Int) = s.padTo(width, ' ')
+
+    println(header.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
+    println(colWidths.map(w => "-" * w).mkString("-|-"))
+
+    data.foreach { row =>
+      println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
+    }
+  }
+
+  private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val headerRow = "Tool & Safe & Unsafe & Incorrect & Unknown & Total \\\\ \\midrule"
+    val dataRows = sortedRuns.map { case (summary, r) =>
+      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
+      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val incorrect = r.incorrectRuns.length
+      val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
+      val total = r.runs.length
+      val toolName = summary.fullToolName.replace("_", "\\_")
+      s"$toolName & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
+    }.mkString("\n")
+    val latexTableString =
+      s"""\\begin{table}[h]
+         |  \\centering
+         |  \\caption{Simplified Combined Results Summary}
+         |  \\label{tbl:combined-results-summary-simple}
+         |  \\begin{tabular}{lrrrrr}
+         |    \\toprule
+         |    $headerRow
+         |    $dataRows \\\\
+         |    \\bottomrule
+         |  \\end{tabular}
+         |\\end{table}
+         |""".stripMargin
+    println(latexTableString)
+  }
+
+  private def printMatrixTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("\n--- Comparison Matrix (Correctly Solved: Safe/Unsafe) ---")
+    println("Row tool solved benchmarks that Column tool could not.")
+
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val toolNames = sortedRuns.map(_._1.fullToolName)
+
+    val matrixData = for ((summaryA, runsA) <- sortedRuns) yield {
+      (summaryA.fullToolName, for ((summaryB, runsB) <- sortedRuns) yield {
+        if (summaryA.fullToolName == summaryB.fullToolName) {
+          "-"
+        } else {
+          val diffRuns = runsA - runsB
+          val safe = diffRuns.satRuns.diff(diffRuns.unsoundRuns).length
+          val unsafe = diffRuns.unsatRuns.diff(diffRuns.incompleteRuns).length
+          s"$safe/$unsafe"
+        }
+      })
+    }
+
+    val allRows = (("vs" +: toolNames)) +: matrixData.map { case (name, data) => name +: data }
+    val colWidths = allRows.transpose.map(col => col.map(_.length).max)
+
+    def pad(s: String, width: Int) = s.padTo(width, ' ')
+
+    println(allRows.head.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
+    println(colWidths.map(w => "-" * w).mkString("-|-"))
+
+    allRows.tail.foreach { row =>
+      println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
+    }
+  }
+
+  private def printMatrixLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    println("% For this table, please include \\usepackage{booktabs} and \\usepackage{rotating} in your LaTeX preamble.")
+    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val toolNames = sortedRuns.map(_._1.fullToolName)
+    val numTools = toolNames.size
+
+    val headerItems = toolNames.map { name =>
+      s"\\rotatebox{90}{${name.replace("_", "\\_")}}"
+    }
+    val headerRow = " & " + headerItems.mkString(" & ") + " \\\\ \\midrule"
+
+    val dataRows = sortedRuns.map { case (summaryA, runsA) =>
+      val rowHeader = summaryA.fullToolName.replace("_", "\\_")
+      val rowData = sortedRuns.map { case (summaryB, runsB) =>
+        if (summaryA.fullToolName == summaryB.fullToolName) {
+          "---"
+        } else {
+          val diffRuns = runsA - runsB
+          val safe = diffRuns.satRuns.diff(diffRuns.unsoundRuns).length
+          val unsafe = diffRuns.unsatRuns.diff(diffRuns.incompleteRuns).length
+          s"$safe/$unsafe"
+        }
+      }.mkString(" & ")
+      s"$rowHeader & $rowData \\\\"
+    }.mkString("\n")
+
+    val latexTableString =
+      s"""\\begin{table}[h]
+         |  \\centering
+         |  \\caption{Comparison Matrix (Row tool solved benchmarks that Column tool could not, safe/unsafe)}
+         |  \\label{tbl:comparison-matrix}
+         |  \\begin{tabular}{l|${"c" * numTools}}
+         |    \\toprule
+         |    $headerRow
+         |    $dataRows \\\\
+         |    \\bottomrule
+         |  \\end{tabular}
+         |\\end{table}
+         |""".stripMargin
+    println(latexTableString)
+  }
+
+
   override def main(args: Array[String]): Unit = {
     val usage =
       """|Usage: yml2stats [options] inFileName | inDirName
@@ -191,9 +320,13 @@ object Main extends App {
          |inDirName       : A directory containing .yml files to process.
          |
          |Options:
-         |  -table6       : Print detailed per-benchmark results in text format.
+         |  -table5-simple  : Print simplified summary table in text format.
+         |  -table5-simple-tex: Print simplified summary table in LaTeX format.
          |  -table5tex    : Print summary table in LaTeX format.
+         |  -table6       : Print detailed per-benchmark results in text format.
          |  -table6tex    : Print detailed per-benchmark results in LaTeX format.
+         |  -matrix       : Print matrix of comparative results in text format.
+         |  -matrixtex    : Print matrix of comparative results in LaTeX format.
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -206,6 +339,12 @@ object Main extends App {
     var remainingArgs = arglist
     while (remainingArgs.nonEmpty) {
       remainingArgs match {
+        case "-table5-simple" :: tail =>
+          doTable5SimpleText = true
+          remainingArgs = tail
+        case "-table5-simple-tex" :: tail =>
+          doTable5SimpleTex = true
+          remainingArgs = tail
         case "-table5tex" :: tail =>
           doTable5Tex = true
           remainingArgs = tail
@@ -214,6 +353,12 @@ object Main extends App {
           remainingArgs = tail
         case "-table6" :: tail =>
           doTable6Text = true
+          remainingArgs = tail
+        case "-matrix" :: tail =>
+          doMatrixText = true
+          remainingArgs = tail
+        case "-matrixtex" :: tail =>
+          doMatrixTex = true
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
@@ -230,13 +375,7 @@ object Main extends App {
       }
     }
 
-    // Determine default action: if no specific table option is given, print summary in text.
-    if (!doTable5Tex && !doTable6Tex && !doTable6Text) {
-      doTable5Text = true
-    }
-
-    // Determine default action: if no specific table option is given, print summary in text.
-    if (!doTable5Tex && !doTable6Tex && !doTable6Text) {
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex) {
       doTable5Text = true
     }
 
@@ -517,55 +656,41 @@ object Main extends App {
         (summary, RunInfos(filteredRuns))
       }).toSeq
 
-    // todo print relevant parts of the summaries of each tool (timeouts etc.)
-
-//    val offset = toolRuns.map(_._1.fullToolName).maxBy(_.length).length
-//    val tabSpaces = 4
-//    val columnLabels = Seq("sat(corr.)\t\t", "unsat(corr.)\t", "unknown\t\t", "timeout\t\t", "error\t\t", "correct\t\t", "unsound\t\t", "incomplete\t", "incorrect")
-//    val firstTabCount = (offset.toDouble / tabSpaces).ceil.toInt + 1
-//    //val firstTabCount = (minTabCount + (offset.toDouble / tabSpaces).floor.toInt) + 1
-//    print("\t"*firstTabCount)
-//    println(columnLabels.mkString(""))
-//    for((summary, runs) <- filteredToolRuns.sortBy(_._1.fullToolName)) {
-//      val tabsAfterToolName = firstTabCount - (summary.fullToolName.length.toDouble / tabSpaces).floor.toInt
-//      print(summary.fullToolName + "\t"*tabsAfterToolName) // todo: print anything else? notes? version?
-//      val columns = Seq(runs.satRuns.length + "(" + runs.satRuns.diff(runs.unsoundRuns).length + ")",
-//        runs.unsatRuns.length + "(" + runs.unsatRuns.diff(runs.incompleteRuns).length + ")",
-//        runs.unknownRuns.length, runs.timeoutRuns.length, runs.errorRuns.length,
-//        runs.correctRuns.length, runs.unsoundRuns.length,
-//        runs.incompleteRuns.length, runs.incorrectRuns.length)
-//      println(columns.mkString("\t\t\t"))
-//    }
-
     if (printCombinatorialResults) {
     // Print combinatorial results
       println
       for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
-      var uniqueDiffRuns = runs
-      for (j <- filteredToolRuns.indices if i != j) {
-        val diffRuns = runs - filteredToolRuns(j)._2
-        println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
-                diffRuns.unsatRuns.length + " that " + filteredToolRuns(j)._1.fullToolName + " could not solve.")
-        if (diffRuns.satRuns.nonEmpty) {
-          println("  sat")
-          diffRuns.satRuns.foreach { run =>
-            println(s"    ${run.bmBaseName}")
+        var uniqueDiffRuns = runs
+        for (j <- filteredToolRuns.indices if i != j) {
+          val diffRuns = runs - filteredToolRuns(j)._2
+          println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
+                  diffRuns.unsatRuns.length + " that " + filteredToolRuns(j)._1.fullToolName + " could not solve.")
+          if (diffRuns.satRuns.nonEmpty) {
+            println("  sat")
+            diffRuns.satRuns.foreach { run =>
+              println(s"    ${run.bmBaseName}")
+            }
           }
-        }
-        if (diffRuns.unsatRuns.nonEmpty) {
-          println("  unsat")
-          diffRuns.unsatRuns.foreach { run =>
-            println(s"    ${run.bmBaseName}")
+          if (diffRuns.unsatRuns.nonEmpty) {
+            println("  unsat")
+            diffRuns.unsatRuns.foreach { run =>
+              println(s"    ${run.bmBaseName}")
+            }
           }
+          uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
         }
-        uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
+        println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
+                uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
+        println
       }
-      println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
-              uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
-      println
-    }
     }
 
+    if (doTable5SimpleText) {
+      printTable5SimpleTextFormat(filteredToolRuns)
+    }
+    if (doTable5SimpleTex) {
+      printTable5SimpleLatexFormat(filteredToolRuns)
+    }
     if (doTable5Text) {
       printTable5TextFormat(filteredToolRuns)
     }
@@ -578,9 +703,13 @@ object Main extends App {
     if (doTable6Tex) {
       printTable6LatexFormat(filteredToolRuns)
     }
-    // --- End of LaTeX Table Printing ---
+    if (doMatrixText) {
+      printMatrixTextFormat(filteredToolRuns)
+    }
+    if (doMatrixTex) {
+      printMatrixLatexFormat(filteredToolRuns)
+    }
 
-    // Printing of unsound and incomplete results for each tool run
     for ((summary, runs) <- filteredToolRuns) {
       if (runs.incorrectRuns nonEmpty) {
         printInfo("\nIncorrect results for " + summary.fullToolName)

@@ -16,10 +16,14 @@ object Settings {
   var printDetailedLatex    = true
   var printCombinatorialResults = false
 
-  var doTable5Text = false  // Summary table, text format
-  var doTable6Text = false  // Detailed table, text format
-  var doTable5Tex = false   // Summary table, LaTeX format
-  var doTable6Tex = false   // Detailed table, LaTeX format
+  var doTable5Text = false
+  var doTable6Text = false
+  var doTable5Tex = false
+  var doTable6Tex = false
+  var doTable5SimpleText = false
+  var doTable5SimpleTex = false
+  var doMatrixText = false
+  var doMatrixTex = false
 
   var verbosityLevel        = 0 // 0 : quiet, 1 : print warnings, 2 : print information
 
