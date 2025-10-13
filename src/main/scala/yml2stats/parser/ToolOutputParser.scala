@@ -3,6 +3,7 @@ package yml2stats.parser
 import scala.collection.mutable.{HashSet => MHashSet}
 import yml2stats.Benchmarks._
 import yml2stats.Main
+import yml2stats.Main.printInfo
 import yml2stats.Settings._
 
 // todo: these parsers need to recognize much more output!
@@ -182,7 +183,7 @@ object Z3OutputParser extends ToolOutputParser {
       } else if (_isWallTimeout || _isKilled && considerKilledAsTimeout) {
         Timeout
       } else {
-        println(
+        printInfo(
           "Warning: could not determine result for " + bmName +
             ", assuming UNKNOWN. Output lines: " + outputLines)
         Unknown
@@ -276,7 +277,7 @@ object CPAOutputParser extends ToolOutputParser {
       } else if (_isWallTimeout || _isKilled && considerKilledAsTimeout) {
         Timeout
       } else {
-        println(
+        printInfo(
           "Warning: could not determine result for " + bmName +
             ", assuming UNKNOWN. Output lines: " + outputLines)
         Unknown
@@ -386,7 +387,7 @@ object SVOutputParser extends ToolOutputParser {
       } else if (_isWallTimeout || _isKilled && considerKilledAsTimeout) {
         Timeout
       } else {
-        println(
+        printInfo(
           "Warning: could not determine result for " + bmName +
             ", assuming UNKNOWN. Output lines: " + filteredOutput)
         Unknown
@@ -481,7 +482,7 @@ object TriCeraOutputParser extends ToolOutputParser {
       } else if (_isWallTimeout || _isKilled && considerKilledAsTimeout) {
         Timeout
       } else {
-        println(
+        printInfo(
           "Warning: could not determine result for " + bmName +
             ", assuming UNKNOWN. Output lines: " + outputLines)
         Unknown
@@ -574,7 +575,7 @@ object SeaHornOutputParser extends ToolOutputParser {
       } else if (_isWallTimeout || _isKilled && considerKilledAsTimeout) {
         Timeout
       } else {
-        println(
+        printInfo(
           "Warning: could not determine result for " + bmName +
             ", assuming UNKNOWN. Output lines: " + outputLines)
         Unknown

@@ -92,13 +92,18 @@ object Benchmarks {
                  val timeoutRuns : Seq[RunInfo]) {
     val length      = runs.length
 
-    val correctRuns =
-      (satRuns ++ unsatRuns).filter(run => run.result == run.expected
-                                           || run.expected == Unknown)
     val unsoundRuns =
       satRuns.filter(run => run.expected == False)
-    val incompleteRuns =
+    val incompleteRuns = {
       unsatRuns.filter(run => run.expected == True)
+    }
+
+    val correctSatRuns = satRuns.filter(run => run.result == run.expected
+                                               || run.expected == Unknown)
+    val correctUnsatRuns = unsatRuns.filter(run => run.result == run.expected
+                                                   || run.expected == Unknown)
+
+    val correctRuns = correctSatRuns ++ correctUnsatRuns
     def incorrectRuns = unsoundRuns ++ incompleteRuns
 
     def getRun(bmBaseName : String) : Option[RunInfo] = {
@@ -113,8 +118,8 @@ object Benchmarks {
 
     def -(that: RunInfos): RunInfos = {
       val diffRuns = diffByBaseName(runs, that.runs)
-      val diffSatRuns = diffByBaseName(satRuns, that.satRuns)
-      val diffUnsatRuns = diffByBaseName(unsatRuns, that.unsatRuns)
+      val diffSatRuns = diffByBaseName(correctSatRuns, that.correctSatRuns)
+      val diffUnsatRuns = diffByBaseName(correctUnsatRuns, that.correctUnsatRuns)
       val diffUnknownRuns = diffByBaseName(unknownRuns, that.unknownRuns)
       val diffErrorRuns = diffByBaseName(errorRuns, that.errorRuns)
       val diffTimeoutRuns = diffByBaseName(timeoutRuns, that.timeoutRuns)

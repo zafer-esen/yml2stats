@@ -1,4 +1,4 @@
-ThisBuild / scalaVersion     := "2.12.8"
+ThisBuild / scalaVersion     := "2.13.14"
 ThisBuild / version          := "0.1.0-SNAPSHOT"
 ThisBuild / organization     := "com.example"
 ThisBuild / organizationName := "example"
@@ -6,10 +6,15 @@ ThisBuild / organizationName := "example"
 lazy val root = (project in file("."))
   .settings(
     name := "yml2stats",
-    libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test",
+    //libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.5" % "test",
     libraryDependencies += "net.jcazevedo" %% "moultingyaml" % "0.4.2",
-    libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2",
-    libraryDependencies += "org.plotly-scala" %% "kaleido" % "0.1.0" // kaleido bindings for scala for generating images in png, svg etc.
+    //libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2",
+    //libraryDependencies += "org.plotly-scala" %% "kaleido" % "0.1.0", // kaleido bindings for scala for generating images in png, svg etc.
+    libraryDependencies ++= Seq(
+      "org.jfree" % "jfreechart" % "1.5.6",
+      "org.jfree" % "org.jfree.svg" % "5.0.7",
+      "com.orsonpdf" % "orsonpdf"   % "1.9"
+    )
     //    libraryDependencies += "org.vegas-viz" %% "vegas" % "0.3.11" // requires scala 2.11
 //    libraryDependencies += "co.theasi" %% "plotly" % "0.2.0"  // requires scala 2.11
   )

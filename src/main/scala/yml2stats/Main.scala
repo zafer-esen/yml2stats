@@ -7,9 +7,9 @@ import Benchmarks.MyYamlProtocol._
 import yml2stats.parser._
 import java.util.Date
 import Settings._
-import org.apache.logging.log4j.core.Filter.Result
+//import org.apache.logging.log4j.core.Filter.Result
 
-object Main extends App {
+object Main {
 
   def printWarning(s : String) = {
     if(verbosityLevel >= 1)
@@ -20,18 +20,34 @@ object Main extends App {
       println(s)
   }
 
+  private def sanitizeToolNameForLatex(toolName: String): String = {
+    Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_"))
+  }
+
+  private def sanitizeEncodingForLatex(encoding: String): String = {
+    val baseEncoding = getCleanEncodingName(encoding)
+    Settings.latexEncodingReplacements.get(baseEncoding) match {
+      case Some(replacement) => replacement
+      case None => encoding.replace("_", "\\_")
+    }
+  }
+
+  // A tuple for sorting runs: (custom encoding order, encoding name, tool name)
+  private def getSortTuple(p: (Summary, RunInfos)): (Int, String, String) = {
+    (getEncodingSortKey(p._1.notes), getCleanEncodingName(p._1.notes), p._1.toolName)
+  }
+
   private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("\n--- Summary Table ---")
-    // Sort rows by notes (encoding name) and then tool name
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val sortedRuns = runs.sortBy(getSortTuple)
 
-    val header = Seq("Tool", "Safe (corr)", "Unsafe (corr)", "Unknown", "Total")
+    val header = Seq("Tool", "Encoding", "Safe (corr)", "Unsafe (corr)", "Unknown", "Total")
     val data = sortedRuns.map { case (summary, r) =>
-      val safeStr = s"${r.satRuns.length} (${r.satRuns.diff(r.unsoundRuns).length})"
-      val unsafeStr = s"${r.unsatRuns.length} (${r.unsatRuns.diff(r.incompleteRuns).length})"
+      val safeStr = s"${r.satRuns.length} (${r.correctSatRuns.length})"
+      val unsafeStr = s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})"
       val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
       val totalStr = s"${r.runs.length}"
-      Seq(summary.fullToolName, safeStr, unsafeStr, unknownStr, totalStr)
+      Seq(summary.toolName, getCleanEncodingName(summary.notes), safeStr, unsafeStr, unknownStr, totalStr)
     }
 
     val allRows = header +: data
@@ -49,8 +65,7 @@ object Main extends App {
 
   private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("\n--- Detailed Per-Benchmark Results ---")
-    // Sort columns by notes (encoding name) and then tool name
-    val orderedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val orderedRuns = runs.sortBy(getSortTuple)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
 
@@ -66,19 +81,19 @@ object Main extends App {
     println(s"${"-" * bmColWidth}-+-${"-" * toolHeaders.length}")
 
     val runMap = orderedRuns.flatMap { case (summary, runInfos) =>
-      runInfos.runs.map(r => (summary.fullToolName, r.bmBaseName) -> r)
+      runInfos.runs.map(r => (s"${summary.notes} ${summary.toolName}", r.bmBaseName) -> r)
     }.toMap
 
     for (bmName <- allBenchmarkNames) {
       val bmNamePadded = bmName.padTo(bmColWidth, ' ')
       val resultString = summaries.map { summary =>
-        runMap.get((summary.fullToolName, bmName)) match {
+        runMap.get((s"${summary.notes} ${summary.toolName}", bmName)) match {
           case Some(run) => run.result match {
             case True    => "T"
             case False   => "F"
-            case _       => "U" // Unknown, Timeout, Error all map to U
+            case _       => "U"
           }
-          case None => " " // This benchmark wasn't run by this tool
+          case None => " "
         }
       }.map(s => s" ${s} ").mkString("")
       println(s"$bmNamePadded |$resultString")
@@ -86,30 +101,31 @@ object Main extends App {
 
     println("\nLegend:")
     summaries.zipWithIndex.foreach { case (summary, i) =>
-      println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
+      println(f"(${(i + 1)}%2d): ${getCleanEncodingName(summary.notes)} ${summary.toolName}")
     }
   }
 
   private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
-    val headerRow = "Tool & Safe (correct) & Unsafe (correct) & Unknown & Total \\\\ \\midrule"
+    val sortedRuns = runs.sortBy(getSortTuple)
+    val headerRow = "Tool & Encoding & Safe (correct) & Unsafe (correct) & Unknown & Total \\\\ \\midrule"
     val dataRows = sortedRuns.map { case (summary, r) =>
       val safeTotal = r.satRuns.length
-      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
+      val safeCorrect = r.correctSatRuns.length
       val unsafeTotal = r.unsatRuns.length
-      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val unsafeCorrect = r.correctUnsatRuns.length
       val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
       val total = r.runs.length
-      val toolName = summary.fullToolName.replace("_", "\\_")
-      s"$toolName & $safeTotal ($safeCorrect) & $unsafeTotal ($unsafeCorrect) & $unknown & $total \\\\"
+      val toolName = sanitizeToolNameForLatex(summary.toolName)
+      val encoding = sanitizeEncodingForLatex(summary.notes)
+      s"$toolName & $encoding & $safeTotal ($safeCorrect) & $unsafeTotal ($unsafeCorrect) & $unknown & $total \\\\"
     }.mkString("\n")
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Combined Results Summary}
          |  \\label{tbl:combined-results-summary}
-         |  \\begin{tabular}{lrrrr}
+         |  \\begin{tabular}{llrrrr}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -125,26 +141,31 @@ object Main extends App {
             "LaTeX preamble:\n\\usepackage{rotating}" +
             "\n\\usepackage{booktabs}\n\\usepackage{longtable}" +
             "\n\\usepackage{xcolor}\n")
-    val orderedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val orderedRuns = runs.sortBy(getSortTuple)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
     val numTools = summaries.size
 
     val headerItems = summaries.map { s =>
-      val toolLabel = (s.toolName.take(3) + " " + s.notes).replace("_", "\\_")
+      val toolLabel = s"${sanitizeEncodingForLatex(s.notes)} ${sanitizeToolNameForLatex(s.toolName)}"
       s"\\rotatebox{90}{$toolLabel}"
     }
     val headerRow = "Benchmark & " + headerItems.mkString(" & ") + " \\\\ \\toprule"
 
     val allBenchmarkNames = results.flatMap(_.runs.map(_.bmBaseName)).distinct.sorted
     val runMap = orderedRuns.flatMap { case (summary, runInfos) =>
-      runInfos.runs.map(r => (summary.fullToolName, r.bmBaseName) -> r)
+      runInfos.runs.map(r => (s"${summary.notes} ${summary.toolName}", r.bmBaseName) -> r)
     }.toMap
 
     val dataRows = allBenchmarkNames.map { bmName =>
-      val benchmarkName = Util.sanitizeString(bmName)
+      val benchmarkName =  {
+        val n1 = bmName.replace("_", "\\_")
+        if (stripSafeUnsafeSuffixInTable6)
+          n1.replace("-unsafe","").replace("-safe","")
+        else n1
+      }
       val rowData = summaries.map { summary =>
-        runMap.get(summary.fullToolName, bmName) match {
+        runMap.get(s"${summary.notes} ${summary.toolName}", bmName) match {
           case Some(run) =>
             var res = run.result match {
               case True    => "T"
@@ -180,16 +201,16 @@ object Main extends App {
 
   private def printTable5SimpleTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("\n--- Simple Summary Table ---")
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
+    val sortedRuns = runs.sortBy(getSortTuple)
 
-    val header = Seq("Tool", "Safe", "Unsafe", "Incorrect", "Unknown", "Total")
+    val header = Seq("Tool", "Encoding", "Safe", "Unsafe", "Incorrect", "Unknown", "Total")
     val data = sortedRuns.map { case (summary, r) =>
-      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
-      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val safeCorrect = r.correctSatRuns.length
+      val unsafeCorrect = r.correctUnsatRuns.length
       val incorrect = r.incorrectRuns.length
       val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
       val totalStr = s"${r.runs.length}"
-      Seq(summary.fullToolName, safeCorrect.toString, unsafeCorrect.toString, incorrect.toString, unknownStr, totalStr)
+      Seq(summary.toolName, getCleanEncodingName(summary.notes), safeCorrect.toString, unsafeCorrect.toString, incorrect.toString, unknownStr, totalStr)
     }
 
     val allRows = header +: data
@@ -207,23 +228,24 @@ object Main extends App {
 
   private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
-    val headerRow = "Tool & Safe & Unsafe & Incorrect & Unknown & Total \\\\ \\midrule"
+    val sortedRuns = runs.sortBy(getSortTuple)
+    val headerRow = "Tool & Encoding & Safe & Unsafe & Incorrect & Unknown & Total \\\\ \\midrule"
     val dataRows = sortedRuns.map { case (summary, r) =>
-      val safeCorrect = r.satRuns.diff(r.unsoundRuns).length
-      val unsafeCorrect = r.unsatRuns.diff(r.incompleteRuns).length
+      val safeCorrect = r.correctSatRuns.length
+      val unsafeCorrect = r.correctUnsatRuns.length
       val incorrect = r.incorrectRuns.length
       val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
       val total = r.runs.length
-      val toolName = summary.fullToolName.replace("_", "\\_")
-      s"$toolName & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
+      val toolName = sanitizeToolNameForLatex(summary.toolName)
+      val encoding = sanitizeEncodingForLatex(summary.notes)
+      s"$toolName & $encoding & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
     }.mkString("\n")
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Simplified Combined Results Summary}
          |  \\label{tbl:combined-results-summary-simple}
-         |  \\begin{tabular}{lrrrrr}
+         |  \\begin{tabular}{llrrrrr}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -238,56 +260,71 @@ object Main extends App {
     println("\n--- Comparison Matrix (Correctly Solved: Safe/Unsafe) ---")
     println("Row tool solved benchmarks that Column tool could not.")
 
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
-    val toolNames = sortedRuns.map(_._1.fullToolName)
+    val sortedRuns = runs.sortBy(getSortTuple)
+    val summaries = sortedRuns.map(_._1)
 
-    val matrixData = for ((summaryA, runsA) <- sortedRuns) yield {
-      (summaryA.fullToolName, for ((summaryB, runsB) <- sortedRuns) yield {
-        if (summaryA.fullToolName == summaryB.fullToolName) {
-          "-"
-        } else {
-          val diffRuns = runsA - runsB
-          val safe = diffRuns.satRuns.diff(diffRuns.unsoundRuns).length
-          val unsafe = diffRuns.unsatRuns.diff(diffRuns.incompleteRuns).length
-          s"$safe/$unsafe"
-        }
-      })
+    if (summaries.isEmpty) {
+      println("No results to display.")
+      return
     }
 
-    val allRows = (("vs" +: toolNames)) +: matrixData.map { case (name, data) => name +: data }
-    val colWidths = allRows.transpose.map(col => col.map(_.length).max)
+    val matrixData = for ((_, runsA) <- sortedRuns) yield {
+      for ((_, runsB) <- sortedRuns) yield {
+        if (runsA == runsB) {
+          "-"
+        } else {
+          val diff = runsA - runsB
+          s"${diff.correctSatRuns.length}/${diff.correctUnsatRuns.length}"
+        }
+      }
+    }
+
+    val numberedHeaders = (1 to summaries.size).map(i => s"($i)")
+    val firstColHeader = " "
+
+    val dataRows = matrixData.zipWithIndex.map { case (rowData, index) =>
+      s"(${(index + 1)})" +: rowData
+    }
+
+    val allRowsAsStrings = (firstColHeader +: numberedHeaders) +: dataRows
+    val colWidths = allRowsAsStrings.transpose.map(col => col.map(_.length).max)
 
     def pad(s: String, width: Int) = s.padTo(width, ' ')
 
-    println(allRows.head.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
+    println(allRowsAsStrings.head.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
     println(colWidths.map(w => "-" * w).mkString("-|-"))
 
-    allRows.tail.foreach { row =>
+    allRowsAsStrings.tail.foreach { row =>
       println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
+    }
+
+    println("\nLegend:")
+    summaries.zipWithIndex.foreach { case (summary, i) =>
+      println(f"(${(i + 1)}%2d): ${getCleanEncodingName(summary.notes)} ${summary.toolName}")
     }
   }
 
   private def printMatrixLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("% For this table, please include \\usepackage{booktabs} and \\usepackage{rotating} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(p => (p._1.notes, p._1.toolName))
-    val toolNames = sortedRuns.map(_._1.fullToolName)
-    val numTools = toolNames.size
+    println("% For this table, please include \\usepackage{booktabs} and " +
+            "\\usepackage{rotating} in your LaTeX preamble.")
+    val sortedRuns = runs.sortBy(getSortTuple)
+    val summaries = sortedRuns.map(_._1)
+    val numTools = summaries.size
 
-    val headerItems = toolNames.map { name =>
-      s"\\rotatebox{90}{${name.replace("_", "\\_")}}"
+    val headerItems = summaries.map { s =>
+      val toolLabel = s"${sanitizeEncodingForLatex(s.notes)} ${sanitizeToolNameForLatex(s.toolName)}"
+      s"\\rotatebox{90}{$toolLabel}"
     }
     val headerRow = " & " + headerItems.mkString(" & ") + " \\\\ \\midrule"
 
     val dataRows = sortedRuns.map { case (summaryA, runsA) =>
-      val rowHeader = summaryA.fullToolName.replace("_", "\\_")
+      val rowHeader = s"${sanitizeEncodingForLatex(summaryA.notes)} ${sanitizeToolNameForLatex(summaryA.toolName)}"
       val rowData = sortedRuns.map { case (summaryB, runsB) =>
-        if (summaryA.fullToolName == summaryB.fullToolName) {
+        if (summaryA.toolName == summaryB.toolName && summaryA.notes == summaryB.notes) {
           "---"
         } else {
-          val diffRuns = runsA - runsB
-          val safe = diffRuns.satRuns.diff(diffRuns.unsoundRuns).length
-          val unsafe = diffRuns.unsatRuns.diff(diffRuns.incompleteRuns).length
-          s"$safe/$unsafe"
+          val diff = runsA - runsB
+          s"${diff.correctSatRuns.length}/${diff.correctUnsatRuns.length}"
         }
       }.mkString(" & ")
       s"$rowHeader & $rowData \\\\"
@@ -309,8 +346,62 @@ object Main extends App {
     println(latexTableString)
   }
 
+  /**
+   * Creates virtual portfolios based on definitions in Settings.
+   * A portfolio's result for a benchmark is the result of the fastest
+   * constituent run that solved it.
+   */
+  private def createVirtualPortfolios(runs: Seq[(Summary, RunInfos)]): Seq[(Summary, RunInfos)] = {
+    if (Settings.virtualPortfolios.isEmpty || !Settings.doPortfolio) {
+      return runs
+    }
 
-  override def main(args: Array[String]): Unit = {
+    val newPortfolios = for (portfolio <- Settings.virtualPortfolios) yield {
+      printInfo(s"Creating virtual portfolio: ${portfolio.name}")
+
+      val constituentRuns = runs.filter { case (summary, _) =>
+        val toolMatch = portfolio.tools.contains("all") || portfolio.tools.contains(summary.toolName)
+        val encodingMatch = portfolio.encodings.contains("all") || portfolio.encodings.contains(getCleanEncodingName(summary.notes))
+        toolMatch && encodingMatch
+      }
+
+      if (constituentRuns.isEmpty) {
+        printWarning(s"Warning: No runs found for virtual portfolio '${portfolio.name}'. Skipping.")
+        None
+      } else {
+        val allBenchmarkNames = constituentRuns.flatMap(_._2.runs.map(_.bmBaseName)).distinct
+
+        val portfolioRunInfos = for (bmName <- allBenchmarkNames.toList) yield {
+          val candidateRuns = constituentRuns.flatMap(_._2.getRun(bmName))
+
+          val solvedRuns = candidateRuns.filter(r => r.result == True || r.result == False)
+
+          val bestRun = if (solvedRuns.nonEmpty) {
+            solvedRuns.minBy(_.duration)
+          } else {
+            // Fallback logic
+            candidateRuns.find(_.result == Timeout)
+                         .orElse(candidateRuns.find(_.result == Unknown))
+                         .orElse(candidateRuns.headOption) // Should always exist
+                         .get
+          }
+          bestRun
+        }
+
+        val representativeSummary = constituentRuns.head._1
+        val portfolioSummary = representativeSummary.copy(
+          toolName = "V. Portfolio",
+          notes = portfolio.name,
+          ymlFileName = "virtual.yml"
+          )
+
+        Some((portfolioSummary, RunInfos(portfolioRunInfos)))
+      }
+    }
+    runs ++ newPortfolios.flatten
+  }
+
+  def main(args: Array[String]) : Unit = {
     val usage =
       """|Usage: yml2stats [options] inFileName | inDirName
          |
@@ -327,6 +418,8 @@ object Main extends App {
          |  -table6tex    : Print detailed per-benchmark results in LaTeX format.
          |  -matrix       : Print matrix of comparative results in text format.
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
+         |  -cactus       : Generate the original cactus plot (cumulative time).
+         |  -cactus2      : Generate a cactus plot (solved benchmarks vs. time).
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -359,6 +452,12 @@ object Main extends App {
           remainingArgs = tail
         case "-matrixtex" :: tail =>
           doMatrixTex = true
+          remainingArgs = tail
+        case "-cactus" :: tail => // Assuming you have an old -cactus
+          doCactus = true
+          remainingArgs = tail
+        case "-cactus2" :: tail => // Add this case
+          doCactus2 = true
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
@@ -399,7 +498,6 @@ object Main extends App {
     }
 
     val yamlAsts = for (file <- files if file.getName.endsWith(".yml")) yield {
-      //println(file + "...")
 
       val inFile = Source.fromFile(file)
       val source = inFile.getLines.mkString("\n")
@@ -489,7 +587,7 @@ object Main extends App {
       }
     }
 
-    val toolRuns = if(mergeYmlFiles || combineResults) {
+    val toolRunsWithoutVP = if(mergeYmlFiles || combineResults) {
       println
       printWarning("Merging files with same tool name and options...")
       val groupedToolRuns =
@@ -537,6 +635,8 @@ object Main extends App {
     }
     else unmergedToolRuns
 
+    val toolRuns = createVirtualPortfolios(toolRunsWithoutVP.toSeq)
+
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
     if(printFairnessWarnings) {
@@ -545,37 +645,34 @@ object Main extends App {
       if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
         printWarning("Runs were executed on systems with different CPU counts!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.cpuCount + " (" + summary.ymlFileName + ")"))
+                                               summary.cpuCount + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
         printWarning("Runs were executed on systems with different architectures!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.architecture + " (" + summary.ymlFileName + ")"))
+                                               summary.architecture + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
         printWarning("Runs were executed on systems with different cpu models!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.cpuModel + " (" + summary.ymlFileName + ")"))
+                                               summary.cpuModel + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
         printWarning("Runs were executed on systems with different total memories!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.memTotal + " (" + summary.ymlFileName + ")"))
+                                               summary.memTotal + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
         printWarning("Runs were executed on systems with different wall time limits!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
+                                               summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
       }
       if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
         printWarning("Runs were executed on systems with different CPU time limits!")
         summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-          summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
+                                               summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
       }
     }
-
-////////////////////////////////////////////////////////////////////////////////
-// Printing of individual (for each provided file) statistics
 
     if (printIndividualStats) {
       for ((summary, runs) <- toolRuns) {
@@ -585,37 +682,30 @@ object Main extends App {
       }
     }
 
-////////////////////////////////////////////////////////////////////////////////
-// Printing of combined (all provided files) statistics
-
-    // eliminate benchmarks that do not appear in one of the files
-
     val smallestRuns = toolRuns.minBy(pair => pair._2.length)
-
-    // collect benchmark names that was executed by all tools
     val commonBenchmarkNames =
       (for (run <- smallestRuns._2.runs
-           if toolRuns.forall(p => p._2.runs.exists(run2 =>
-             run2.bmBaseName == run.bmBaseName )))
-        yield run.bmBaseName).toSet
+            if toolRuns.forall(p => p._2.runs.exists(run2 =>
+                                                       run2.bmBaseName == run.bmBaseName )))
+      yield run.bmBaseName).toSet
 
     printInfo(commonBenchmarkNames.size + " benchmarks were executed by all tools.")
 
     val errorRunNamesForEachTool : Seq[Seq[String]] =
       toolRuns.map(p => p._2.errorRuns.filter(run =>
-        if(excludeSolverErrors) // leave only errors without solve errors
-          !run.result.asInstanceOf[Error].errorTypes.contains(ErrorType.Solve)
-        else
-          true // do not exclude anything
-      ).
-        map(_.bmBaseName)).toSeq
+                                                if(excludeSolverErrors)
+                                                  !run.result.asInstanceOf[Error].errorTypes.contains(ErrorType.Solve)
+                                                else
+                                                  true
+                                              ).
+                         map(_.bmBaseName)).toSeq
     val combinedErrorRuns : Set[String] =
-      errorRunNamesForEachTool.reduce(_ union _).toSet
+      if (errorRunNamesForEachTool.nonEmpty) errorRunNamesForEachTool.reduce(_ union _).toSet else Set.empty
     val commonBenchmarkNamesWithoutErrors : Set[String] =
       commonBenchmarkNames diff combinedErrorRuns
 
     printInfo(commonBenchmarkNamesWithoutErrors.size +
-      " benchmarks had no errors in any of the tools.")
+              " benchmarks had no errors in any of the tools.")
 
     val commonBenchmarkNamesMaybeWithoutErrors =
       if(excludeErrors) commonBenchmarkNamesWithoutErrors
@@ -623,41 +713,36 @@ object Main extends App {
 
     printInfo(
       (if(excludeErrors) "Excluding" else "Including") +
-        " benchmarks that any tool reported an error for in comparisons.\n"
-    )
-    // todo: do not exclude specific types of errors? (e.g., solve)
-    //  alternatively categorize these as "unknown"
+      " benchmarks that any tool reported an error for in comparisons.\n"
+      )
 
     val incorrectRunNamesForEachTool : Seq[Seq[String]] =
       toolRuns.map(p => p._2.incorrectRuns.map(_.bmBaseName)).toSeq
     val combinedIncorrectRuns : Set[String] =
-      incorrectRunNamesForEachTool.reduce(_ union _).toSet
+      if(incorrectRunNamesForEachTool.nonEmpty) incorrectRunNamesForEachTool.reduce(_ union _).toSet else Set.empty
     val commonBenchmarkNamesWithoutIncorrect : Set[String] =
       commonBenchmarkNamesMaybeWithoutErrors diff combinedIncorrectRuns
 
     printInfo(commonBenchmarkNamesWithoutIncorrect.size +
-      " benchmarks had no incorrect results in any of the tools.")
+              " benchmarks had no incorrect results in any of the tools.")
     printInfo(
       (if(excludeIncorrect) "Excluding" else "Including") +
-        " benchmarks that any tool returned an incorrect result for in comparisons.\n"
-    )
+      " benchmarks that any tool returned an incorrect result for in comparisons.\n"
+      )
 
     val finalCommonBenchmarkNames =
       if(excludeIncorrect) commonBenchmarkNamesWithoutIncorrect
       else commonBenchmarkNamesMaybeWithoutErrors
 
-    //commonBenchmarkNamesWithoutErrors.foreach(println)
-
     val filteredToolRuns : Seq[(Summary, RunInfos)] =
       (for ((summary, runs) <- toolRuns) yield {
         val filteredRuns = runs.runs.filter(run =>
-          finalCommonBenchmarkNames contains run.bmBaseName
-        )
+                                              finalCommonBenchmarkNames contains run.bmBaseName
+                                            )
         (summary, RunInfos(filteredRuns))
       }).toSeq
 
     if (printCombinatorialResults) {
-    // Print combinatorial results
       println
       for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
         var uniqueDiffRuns = runs
@@ -711,24 +796,21 @@ object Main extends App {
     }
 
     for ((summary, runs) <- filteredToolRuns) {
-      if (runs.incorrectRuns nonEmpty) {
+      if (runs.incorrectRuns.nonEmpty) {
         printInfo("\nIncorrect results for " + summary.fullToolName)
       }
-      if(runs.unsoundRuns nonEmpty) {
+      if(runs.unsoundRuns.nonEmpty) {
         printInfo("\nUnsound (expected unsat, got sat)")
         runs.unsoundRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
         println
       }
-      if (runs.incompleteRuns nonEmpty) {
+      if (runs.incompleteRuns.nonEmpty) {
         printInfo("\nIncomplete (expected sat, got unsat)")
         runs.incompleteRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
         println
       }
     }
 
-
-////////////////////////////////////////////////////////////////////////////////
-// Consistency checks
     {
       def runsAreConsistent (run1 : RunInfo, run2 : RunInfo) = {
         run1.result match {
@@ -747,11 +829,11 @@ object Main extends App {
           if(!runsAreConsistent(run1, run2)) {
             inconsistentCount += 1
             printInfo(run1.bmBaseName + " does not have consistent results in" +
-              " all tools:\n\t" +
-              runPerTool.map{
-                case (tool, run) => tool + " (expected: " + run.expected +
-                  ", result: " + run.result + ")"
-              }.mkString("\n\t"))
+                      " all tools:\n\t" +
+                      runPerTool.map{
+                        case (tool, run) => tool + " (expected: " + run.expected +
+                                            ", result: " + run.result + ")"
+                      }.mkString("\n\t"))
           }
         }
       }
@@ -760,16 +842,13 @@ object Main extends App {
       else
         printInfo("No inconsistent runs detected!")
     }
-////////////////////////////////////////////////////////////////////////////////
 
-// Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
     if(printCombinatorialResults) {
       println
       for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
-        // runs that *only* this tool solved
         var uniqueDiffRuns = runs
         for (j <- filteredToolRuns.indices if i != j) {
-          val diffRuns = runs - filteredToolRuns(j)._2 // runs that this tool solved that some other tool could not solve
+          val diffRuns = runs - filteredToolRuns(j)._2
           println(summary.fullToolName + " solved " + diffRuns.satRuns.length + "/" +
                   diffRuns.unsatRuns.length + " that " +
                   filteredToolRuns(j)._1.fullToolName + " could not solve.")
@@ -792,17 +871,13 @@ object Main extends App {
         println
       }
     }
-    // alloc(h1, o1) = (h2, a2) & read(h2, a2) = o2
 
-// Print combinatorial results (i.e., correct results that a tool had an answer for but a subset of others did not )
-    // todo: wip, only here for testing purposes
     if(!disableAllPlots && (plotDurations || plotDurationsFile) &&
-      filteredToolRuns.length > 1) {
+       filteredToolRuns.length > 1) {
       println
       println("Generating durations plots")
 
       val toolRunsWithExpectedInfo = if (plotDurationsUseResultInsteadOfExpected) {
-        // use runs with most results
         filteredToolRuns.maxBy(_._2.correctRuns.size)
       } else {
         filteredToolRuns.find(_._2.runs.exists(
@@ -827,15 +902,22 @@ object Main extends App {
       val expUnknownNames = toolRunsWithExpectedInfo._2.runs.filter(isExpectedUnknown).map(_.bmBaseName)
 
       for (Seq(toolRuns1, toolRuns2) <- filteredToolRuns.combinations(2)) {
-        Plotting.plotDuratıons(
-          toolRuns1, toolRuns2, expSatNames, expUnsatNames, expUnknownNames)
+        ???
+//        Plotting.plotDuratıons(
+//          toolRuns1, toolRuns2, expSatNames, expUnsatNames, expUnknownNames)
       }
     }
 
-    if(!disableAllPlots && (plotCactus || plotCactusFile)) {
+    if (!disableAllPlots && (doCactus || plotCactusFile)) {
       println
       println("Generating cactus plot")
-      Plotting.plotCactus(filteredToolRuns)
+      ???
+      //Plotting.plotCactus(filteredToolRuns)
+    }
+
+    if (!disableAllPlots && doCactus2) {
+      println()
+      Plotting.plotCactusByTime(filteredToolRuns)
     }
   }
 
@@ -843,43 +925,43 @@ object Main extends App {
     if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
       printWarning("\t\tRuns were executed on systems with different CPU counts!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuCount + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.cpuCount + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.architecture != summaries.head.architecture)) {
       printWarning("\t\tRuns were executed on systems with different architectures!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.architecture + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.architecture + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuModel != summaries.head.cpuModel)) {
       printWarning("\t\tRuns were executed on systems with different cpu models!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuModel + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.cpuModel + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.memTotal != summaries.head.memTotal)) {
       printWarning("\t\tRuns were executed on systems with different total memories!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.memTotal + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.memTotal + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.wallTimeLimit != summaries.head.wallTimeLimit)) {
       printWarning("\t\tRuns were executed on systems with different wall time limits!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + ": " +
-        summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
+                                             summary.wallTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.cpuTimeLimit != summaries.head.cpuTimeLimit)) {
       printWarning("\t\tRuns were executed on systems with different CPU time limits!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.cpuTimeLimit + " (" + summary.ymlFileName + ")"))
     }
     if (summaries.exists(s => s.toolVersion != summaries.head.toolVersion)) {
       printWarning("\t\tRuns were executed with different versions of the tool!")
       summaries.foreach(summary => printInfo("\t" + summary.fullToolName + "(" +
-        summary.toolVersion + ")" + " on " + summary.startDate + ": " +
-        summary.toolVersion + " (" + summary.ymlFileName + ")"))
+                                             summary.toolVersion + ")" + " on " + summary.startDate + ": " +
+                                             summary.toolVersion + " (" + summary.ymlFileName + ")"))
     }
   }
 }
