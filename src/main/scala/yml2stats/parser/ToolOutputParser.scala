@@ -11,6 +11,12 @@ import yml2stats.Settings._
 trait ToolOutputParser {
   def apply(outputLines: Seq[String], bmName: String): Result
 }
+object StandardSMTOutputParser extends ToolOutputParser {
+  def apply(outputLines: Seq[String], bmName: String): Result = {
+    Z3OutputParser(outputLines, bmName)
+  }
+}
+
 object EldaricaOutputParser extends ToolOutputParser {
 
   def apply(outputLines: Seq[String], bmName: String): Result = {

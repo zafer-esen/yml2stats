@@ -417,8 +417,8 @@ object Plotting {
       toolRuns,
       _.correctSatRuns,
       "safe-solved",
-      "Safe Solved",
-      "Number of solved safe benchmarks",
+      "S Solved",
+      "Number of solved S benchmarks",
       Settings.cactusPlotSafeOptions
     )
 
@@ -426,8 +426,8 @@ object Plotting {
       toolRuns,
       _.correctUnsatRuns,
       "unsafe-solved",
-      "Unsafe Solved",
-      "Number of solved unsafe benchmarks",
+      "U Solved",
+      "Number of solved U benchmarks",
       Settings.cactusPlotUnsafeOptions
     )
   }

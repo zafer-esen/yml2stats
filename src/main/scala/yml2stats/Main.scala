@@ -32,22 +32,29 @@ object Main {
     }
   }
 
-  // A tuple for sorting runs: (custom encoding order, encoding name, tool name)
-  private def getSortTuple(p: (Summary, RunInfos)): (Int, String, String) = {
-    (getEncodingSortKey(p._1.notes), getCleanEncodingName(p._1.notes), p._1.toolName)
+  // A tuple for sorting runs: (tool name)
+  private def getSortTuple(p: (Summary, RunInfos)): String = {
+    p._1.toolName
   }
 
   private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("\n--- Summary Table ---")
     val sortedRuns = runs.sortBy(getSortTuple)
 
-    val header = Seq("Tool", "Encoding", "Safe (corr)", "Unsafe (corr)", "Unknown", "Total")
+    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+
+    val header = if (hasIncorrect)
+      Seq("Tool", "Sat (corr)", "Unsat (corr)", "Timeout", "Error", "Unknown", "Total")
+    else
+      Seq("Tool", "Sat", "Unsat", "Timeout", "Error", "Unknown", "Total")
+
     val data = sortedRuns.map { case (summary, r) =>
-      val safeStr = s"${r.satRuns.length} (${r.correctSatRuns.length})"
-      val unsafeStr = s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})"
-      val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
+      val safeStr = if (hasIncorrect) s"${r.satRuns.length} (${r.correctSatRuns.length})" else s"${r.satRuns.length}"
+      val unsafeStr = if (hasIncorrect) s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})" else s"${r.unsatRuns.length}"
+      val timeoutStr = s"${r.timeoutRuns.length}"
+      val errorStr = s"${r.errorRuns.length}"
+      val unknownStr = s"${r.unknownRuns.length}"
       val totalStr = s"${r.runs.length}"
-      Seq(summary.toolName, getCleanEncodingName(summary.notes), safeStr, unsafeStr, unknownStr, totalStr)
+      Seq(summary.toolName, safeStr, unsafeStr, timeoutStr, errorStr, unknownStr, totalStr)
     }
 
     val allRows = header +: data
@@ -64,7 +71,6 @@ object Main {
   }
 
   private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("\n--- Detailed Per-Benchmark Results ---")
     val orderedRuns = runs.sortBy(getSortTuple)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
@@ -89,9 +95,11 @@ object Main {
       val resultString = summaries.map { summary =>
         runMap.get((s"${summary.notes} ${summary.toolName}", bmName)) match {
           case Some(run) => run.result match {
-            case True    => "T"
-            case False   => "F"
-            case _       => "U"
+            case True    => "S"
+            case False   => "U"
+            case Timeout => "?"
+            case Error(_,_) => "E"
+            case _       => "?"
           }
           case None => " "
         }
@@ -101,31 +109,43 @@ object Main {
 
     println("\nLegend:")
     summaries.zipWithIndex.foreach { case (summary, i) =>
-      println(f"(${(i + 1)}%2d): ${getCleanEncodingName(summary.notes)} ${summary.toolName}")
+      println(f"(${(i + 1)}%2d): ${summary.toolName}")
     }
   }
 
   private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = runs.sortBy(getSortTuple)
-    val headerRow = "Tool & Encoding & Safe (correct) & Unsafe (correct) & Unknown & Total \\\\ \\midrule"
+
+    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+
+    val headerRow = if (hasIncorrect)
+      "Tool & Sat (corr) & Unsat (corr) & Timeout & Error & Unknown & Total \\\\ \\midrule"
+    else
+      "Tool & Sat & Unsat & Timeout & Error & Unknown & Total \\\\ \\midrule"
+
     val dataRows = sortedRuns.map { case (summary, r) =>
       val safeTotal = r.satRuns.length
       val safeCorrect = r.correctSatRuns.length
       val unsafeTotal = r.unsatRuns.length
       val unsafeCorrect = r.correctUnsatRuns.length
-      val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
+      val timeout = r.timeoutRuns.length
+      val error = r.errorRuns.length
+      val unknown = r.unknownRuns.length
       val total = r.runs.length
       val toolName = sanitizeToolNameForLatex(summary.toolName)
-      val encoding = sanitizeEncodingForLatex(summary.notes)
-      s"$toolName & $encoding & $safeTotal ($safeCorrect) & $unsafeTotal ($unsafeCorrect) & $unknown & $total \\\\"
+
+      val safeStr = if (hasIncorrect) s"$safeTotal ($safeCorrect)" else s"$safeTotal"
+      val unsafeStr = if (hasIncorrect) s"$unsafeTotal ($unsafeCorrect)" else s"$unsafeTotal"
+
+      s"$toolName & $safeStr & $unsafeStr & $timeout & $error & $unknown & $total \\\\"
     }.mkString("\n")
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Combined Results Summary}
          |  \\label{tbl:combined-results-summary}
-         |  \\begin{tabular}{llrrrr}
+         |  \\begin{tabular}{lrrrrrrr}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -168,9 +188,11 @@ object Main {
         runMap.get(s"${summary.notes} ${summary.toolName}", bmName) match {
           case Some(run) =>
             var res = run.result match {
-              case True    => "T"
-              case False   => "F"
-              case _       => "U"
+              case True    => "S"
+              case False   => "U"
+              case Timeout => "?"
+              case Error(_,_) => "E"
+              case _       => "?"
             }
             if (run.result == run.expected && (run.result == True || run.result == False)) {
               res = s"\\textbf{\\textcolor{green!50!black}{${res}}}"
@@ -200,17 +222,29 @@ object Main {
   }
 
   private def printTable5SimpleTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("\n--- Simple Summary Table ---")
     val sortedRuns = runs.sortBy(getSortTuple)
 
-    val header = Seq("Tool", "Encoding", "Safe", "Unsafe", "Incorrect", "Unknown", "Total")
+    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+
+    var header = Seq("Tool", "Sat", "Unsat")
+    if (hasIncorrect) {
+      header = header :+ "Incorrect"
+    }
+    header = header ++ Seq("Unknown", "Total")
+
     val data = sortedRuns.map { case (summary, r) =>
       val safeCorrect = r.correctSatRuns.length
       val unsafeCorrect = r.correctUnsatRuns.length
       val incorrect = r.incorrectRuns.length
       val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
       val totalStr = s"${r.runs.length}"
-      Seq(summary.toolName, getCleanEncodingName(summary.notes), safeCorrect.toString, unsafeCorrect.toString, incorrect.toString, unknownStr, totalStr)
+
+      var row = Seq(summary.toolName, safeCorrect.toString, unsafeCorrect.toString)
+      if (hasIncorrect) {
+        row = row :+ incorrect.toString
+      }
+      row = row ++ Seq(unknownStr, totalStr)
+      row
     }
 
     val allRows = header +: data
@@ -229,7 +263,7 @@ object Main {
   private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = runs.sortBy(getSortTuple)
-    val headerRow = "Tool & Encoding & Safe & Unsafe & Incorrect & Unknown & Total \\\\ \\midrule"
+    val headerRow = "Tool & Sat & Unsat & Incorrect & Unknown & Total \\\\ \\midrule"
     val dataRows = sortedRuns.map { case (summary, r) =>
       val safeCorrect = r.correctSatRuns.length
       val unsafeCorrect = r.correctUnsatRuns.length
@@ -237,15 +271,14 @@ object Main {
       val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
       val total = r.runs.length
       val toolName = sanitizeToolNameForLatex(summary.toolName)
-      val encoding = sanitizeEncodingForLatex(summary.notes)
-      s"$toolName & $encoding & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
+      s"$toolName & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
     }.mkString("\n")
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Simplified Combined Results Summary}
          |  \\label{tbl:combined-results-summary-simple}
-         |  \\begin{tabular}{llrrrrr}
+         |  \\begin{tabular}{lrrrrr}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -257,9 +290,6 @@ object Main {
   }
 
   private def printMatrixTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("\n--- Comparison Matrix (Correctly Solved: Safe/Unsafe) ---")
-    println("Row tool solved benchmarks that Column tool could not.")
-
     val sortedRuns = runs.sortBy(getSortTuple)
     val summaries = sortedRuns.map(_._1)
 
@@ -300,7 +330,7 @@ object Main {
 
     println("\nLegend:")
     summaries.zipWithIndex.foreach { case (summary, i) =>
-      println(f"(${(i + 1)}%2d): ${getCleanEncodingName(summary.notes)} ${summary.toolName}")
+      println(f"(${(i + 1)}%2d): ${summary.toolName}")
     }
   }
 
@@ -312,15 +342,15 @@ object Main {
     val numTools = summaries.size
 
     val headerItems = summaries.map { s =>
-      val toolLabel = s"${sanitizeEncodingForLatex(s.notes)} ${sanitizeToolNameForLatex(s.toolName)}"
+      val toolLabel = s"${sanitizeToolNameForLatex(s.toolName)}"
       s"\\rotatebox{90}{$toolLabel}"
     }
     val headerRow = " & " + headerItems.mkString(" & ") + " \\\\ \\midrule"
 
     val dataRows = sortedRuns.map { case (summaryA, runsA) =>
-      val rowHeader = s"${sanitizeEncodingForLatex(summaryA.notes)} ${sanitizeToolNameForLatex(summaryA.toolName)}"
+      val rowHeader = s"${sanitizeToolNameForLatex(summaryA.toolName)}"
       val rowData = sortedRuns.map { case (summaryB, runsB) =>
-        if (summaryA.toolName == summaryB.toolName && summaryA.notes == summaryB.notes) {
+        if (summaryA.toolName == summaryB.toolName) {
           "---"
         } else {
           val diff = runsA - runsB
@@ -333,7 +363,7 @@ object Main {
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
-         |  \\caption{Comparison Matrix (Row tool solved benchmarks that Column tool could not, safe/unsafe)}
+         |  \\caption{Comparison Matrix (Row tool solved benchmarks that Column tool could not, S/U)}
          |  \\label{tbl:comparison-matrix}
          |  \\begin{tabular}{l|${"c" * numTools}}
          |    \\toprule
@@ -411,15 +441,16 @@ object Main {
          |inDirName       : A directory containing .yml files to process.
          |
          |Options:
-         |  -table5-simple  : Print simplified summary table in text format.
-         |  -table5-simple-tex: Print simplified summary table in LaTeX format.
-         |  -table5tex    : Print summary table in LaTeX format.
-         |  -table6       : Print detailed per-benchmark results in text format.
-         |  -table6tex    : Print detailed per-benchmark results in LaTeX format.
+         |  -summary      : Print simplified summary table in text format.
+         |  -summary-tex  : Print simplified summary table in LaTeX format.
+         |  -summary-ext  : Print extended summary table in text format (was -table5tex default without tex).
+         |  -summary-ext-tex : Print extended summary table in LaTeX format.
+         |  -details      : Print detailed per-benchmark results in text format.
+         |  -details-tex  : Print detailed per-benchmark results in LaTeX format.
          |  -matrix       : Print matrix of comparative results in text format.
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
-         |  -cactus       : Generate the original cactus plot (cumulative time).
-         |  -cactus2      : Generate a cactus plot (solved benchmarks vs. time).
+         |  -cactus       : Generate a cactus plot (solved benchmarks vs. time).
+         |  -cactus2      : Alias for -cactus.
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -430,23 +461,26 @@ object Main {
     }
 
     var remainingArgs = arglist
-    while (remainingArgs.nonEmpty) {
-      remainingArgs match {
-        case "-table5-simple" :: tail =>
-          doTable5SimpleText = true
-          remainingArgs = tail
-        case "-table5-simple-tex" :: tail =>
-          doTable5SimpleTex = true
-          remainingArgs = tail
-        case "-table5tex" :: tail =>
-          doTable5Tex = true
-          remainingArgs = tail
-        case "-table6tex" :: tail =>
-          doTable6Tex = true
-          remainingArgs = tail
-        case "-table6" :: tail =>
-          doTable6Text = true
-          remainingArgs = tail
+      while (remainingArgs.nonEmpty) {
+        remainingArgs match {
+          case "-summary" :: tail =>
+            doTable5SimpleText = true
+            remainingArgs = tail
+          case "-summary-tex" :: tail =>
+            doTable5SimpleTex = true
+            remainingArgs = tail
+          case "-summary-ext" :: tail => // old doTable5Text
+            doTable5Text = true
+            remainingArgs = tail
+          case "-summary-ext-tex" :: tail =>
+            doTable5Tex = true
+            remainingArgs = tail
+          case "-details-tex" :: tail =>
+            doTable6Tex = true
+            remainingArgs = tail
+          case "-details" :: tail =>
+            doTable6Text = true
+            remainingArgs = tail
         case "-matrix" :: tail =>
           doMatrixText = true
           remainingArgs = tail
@@ -535,7 +569,14 @@ object Main {
             case s if s.toLowerCase contains "sea"       => SeaHornOutputParser
             case s if s.toLowerCase contains "tri"       => TriCeraOutputParser
             case s if s.toLowerCase contains "predator"  => SVOutputParser
-            case s => throw new Exception("An output parser for the tool " + s + " is not yet implemented.")
+            case _ =>
+              // Check if benchmarks are SMT files
+              if (rawRunInfos.exists(_.bmName.endsWith(".smt2"))) {
+                printInfo("Using Standard (Z3-like) SMT Output Parser based on .smt2 extension.")
+                StandardSMTOutputParser
+              } else {
+                 throw new Exception("An output parser for the tool " + rawSummary.toolName + " can not be determined.")
+              }
           }
 
         val expectedStatusParser =
@@ -547,6 +588,13 @@ object Main {
                       (s.toLowerCase contains "predator") ||
                       (s.toLowerCase contains "cpa") =>
               TriCeraExpectedStatusParser
+            case _ =>
+               if (rawRunInfos.exists(_.bmName.endsWith(".smt2"))) {
+                 SMTExpectedStatusParser
+               } else {
+                 // default fallback
+                 TriCeraExpectedStatusParser
+               }
           }
 
         val runInfos = RunInfos(for (rawRunInfo <- rawRunInfos) yield {
@@ -765,33 +813,47 @@ object Main {
           uniqueDiffRuns = uniqueDiffRuns - filteredToolRuns(j)._2
         }
         println(summary.fullToolName + " solved " + uniqueDiffRuns.satRuns.length + "/" +
-                uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
+        uniqueDiffRuns.unsatRuns.length + " that any other tool could not solve.")
         println
       }
     }
 
+    var firstTable = true
+    def printSep() = {
+      if (!firstTable) println("\n")
+      firstTable = false
+    }
+
     if (doTable5SimpleText) {
+      printSep()
       printTable5SimpleTextFormat(filteredToolRuns)
     }
     if (doTable5SimpleTex) {
+      printSep()
       printTable5SimpleLatexFormat(filteredToolRuns)
     }
     if (doTable5Text) {
+      printSep()
       printTable5TextFormat(filteredToolRuns)
     }
     if (doTable6Text) {
+      printSep()
       printTable6TextFormat(filteredToolRuns)
     }
     if (doTable5Tex) {
+      printSep()
       printTable5LatexFormat(filteredToolRuns)
     }
     if (doTable6Tex) {
+      printSep()
       printTable6LatexFormat(filteredToolRuns)
     }
     if (doMatrixText) {
+      printSep()
       printMatrixTextFormat(filteredToolRuns)
     }
     if (doMatrixTex) {
+      printSep()
       printMatrixLatexFormat(filteredToolRuns)
     }
 
@@ -911,7 +973,7 @@ object Main {
     if (!disableAllPlots && (doCactus || plotCactusFile)) {
       println
       println("Generating cactus plot")
-      ???
+      Plotting.plotCactusByTime(filteredToolRuns)
       //Plotting.plotCactus(filteredToolRuns)
     }
 
