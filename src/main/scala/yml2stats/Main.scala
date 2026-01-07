@@ -511,6 +511,8 @@ object Main {
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
          |  -cactus-pdf   : Generate a cactus plot in PDF format.
          |  -cactus-plotly: Generate a cactus plot using Plotly (DISABLED).
+         |  -v            : Set verbosity level to 1 (warnings).
+         |  -v:N          : Set verbosity level to N (0=quiet, 1=warnings, 2=info).
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -552,6 +554,19 @@ object Main {
           remainingArgs = tail
         case "-cactus-pdf" :: tail =>
           doCactusPdf = true
+          remainingArgs = tail
+        case "-v" :: tail =>
+          verbosityLevel = 1
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-v:") =>
+          try {
+            verbosityLevel = opt.substring(3).toInt
+          } catch {
+            case _: NumberFormatException =>
+              println(s"Invalid verbosity level in option: $opt")
+              println(usage)
+              return
+          }
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
@@ -977,9 +992,9 @@ object Main {
           if(!runsAreConsistent(run1, run2)) {
             assert(run1.expected == run2.expected)
             inconsistentRuns +=
-              s"${run1.bmBaseName} (exp: ${run1.expected}, " +
-              s"${tool1}: ${run1.result}, " +
-              s"${tool2}: ${run2.result})"
+              s"${run1.bmName} (exp: ${run1.expected}, " +
+              s"$tool1: ${run1.result}, " +
+              s"$tool2: ${run2.result})"
           }
         }
       }
