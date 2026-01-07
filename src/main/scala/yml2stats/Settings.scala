@@ -63,8 +63,8 @@ object Settings {
   var doTable5SimpleTex  = false
   var doMatrixText = false
   var doMatrixTex  = false
-  var doCactus     = false
-  var doCactus2    = false
+  var doCactusPdf  = false
+  var doCactusPlotly = false
 
   var verbosityLevel        = 0 // 0 : quiet, 1 : print warnings, 2 : print information
 
@@ -188,12 +188,12 @@ object Settings {
       .replace("\\text{-}", "-")
       .replaceAll("_\\{([^}]+)\\}", "-$1")
 
-    if (plainEncoding == "None")
+    if (plainEncoding == "None" || plainEncoding.isEmpty)
       s"$plainTool"
     else if (virtualPortfolios.exists(vp => vp.name == plainEncoding))
       s"$plainTool ($plainEncoding)"
     else
-      s"$plainEncoding"
+      s"$plainTool ($plainEncoding)"
 
   }
 

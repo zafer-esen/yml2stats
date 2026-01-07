@@ -20,6 +20,63 @@ object Main {
       println(s)
   }
 
+  private def makeUniqueBaseNames(runs: Seq[RunInfo]): Seq[RunInfo] = {
+    val grouped = runs.groupBy(_.bmBaseName)
+
+    grouped.flatMap { case (baseName, collisions) =>
+      if (collisions.size <= 1) {
+        collisions
+      } else {
+        // map each run to its path parts (reversed)
+        val runPaths = collisions.map(r => r -> r.bmName.split("/").reverse).toMap
+        val depths = scala.collection.mutable.Map(collisions.map(_ -> 1): _*)
+
+        var unique = false
+        var currentNames = Seq[(RunInfo, String)]()
+
+        while (!unique) {
+          currentNames = collisions.map { r =>
+            val parts = runPaths(r)
+            val d = math.min(depths(r), parts.length)
+            val name = parts.take(d).reverse.mkString("-")
+            r -> name
+          }
+
+          val nameCounts = currentNames.map(_._2).groupBy(identity).map { case (k, v) => k -> v.size }
+          val collisionsFound = nameCounts.filter(_._2 > 1).keys.toSet
+
+          if (collisionsFound.isEmpty) {
+            unique = true
+          } else {
+            // Try to resolve collisions by increasing depth
+            var changed = false
+            collisions.foreach { r =>
+              val name = currentNames.find(_._1 == r).get._2
+              if (collisionsFound.contains(name)) {
+                val parts = runPaths(r)
+                if (depths(r) < parts.length) {
+                  depths(r) += 1
+                  changed = true
+                }
+              }
+            }
+
+            if (!changed) {
+              val collidingRunNames = collisions
+                .filter(r => collisionsFound.contains(currentNames.find(_._1 == r).get._2))
+                .map(_.bmName)
+              throw new RuntimeException(s"Could not generate unique names for the following benchmarks (paths might be identical or sub-paths of each other): ${collidingRunNames.mkString(", ")}")
+            }
+          }
+        }
+
+        currentNames.map { case (r, name) =>
+          if (name != r.bmBaseName) r.copy(uniqueBaseName = Some(name)) else r
+        }
+      }
+    }.toSeq
+  }
+
   private def sanitizeToolNameForLatex(toolName: String): String = {
     Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_"))
   }
@@ -449,8 +506,8 @@ object Main {
          |  -details-tex  : Print detailed per-benchmark results in LaTeX format.
          |  -matrix       : Print matrix of comparative results in text format.
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
-         |  -cactus       : Generate a cactus plot (solved benchmarks vs. time).
-         |  -cactus2      : Alias for -cactus.
+         |  -cactus-pdf   : Generate a cactus plot in PDF format.
+         |  -cactus-plotly: Generate a cactus plot using Plotly (DISABLED).
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -487,11 +544,11 @@ object Main {
         case "-matrixtex" :: tail =>
           doMatrixTex = true
           remainingArgs = tail
-        case "-cactus" :: tail => // Assuming you have an old -cactus
-          doCactus = true
+        case "-cactus-plotly" :: tail =>
+          doCactusPlotly = true
           remainingArgs = tail
-        case "-cactus2" :: tail => // Add this case
-          doCactus2 = true
+        case "-cactus-pdf" :: tail =>
+          doCactusPdf = true
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
@@ -508,7 +565,7 @@ object Main {
       }
     }
 
-    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex) {
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doCactusPdf && !doCactusPlotly) {
       doTable5Text = true
     }
 
@@ -555,7 +612,7 @@ object Main {
 ////////////////////////////////////////////////////////////////////////////////
 // Convert YAML ASTs into useful data structures
 
-    val unmergedToolRuns : Seq[(Summary, RunInfos)] =
+    val unmergedToolRuns : Seq[(Summary, Seq[RunInfo])] =
       for ((fileName, ast) <- yamlAsts) yield {
         printInfo("Processing " + fileName + "...")
         val (rawSummary, rawRunInfos) =
@@ -604,7 +661,7 @@ object Main {
                   rawRunInfo.duration.dropRight(1).toDouble) // todo properly parse duration
         })
         printInfo("done! " + runInfos.length + " runs found.")
-        (Summary(rawSummary, fileName), runInfos)
+        (Summary(rawSummary, fileName), runInfos.runs)
       }
 
     if (mergeYmlFiles && combineResults)
@@ -635,7 +692,7 @@ object Main {
       }
     }
 
-    val toolRunsWithoutVP = if(mergeYmlFiles || combineResults) {
+    val toolRunsWithoutVP : Seq[(Summary, RunInfos)] = if(mergeYmlFiles || combineResults) {
       println
       printWarning("Merging files with same tool name and options...")
       val groupedToolRuns =
@@ -648,19 +705,32 @@ object Main {
             else
               s"${p._1.fullToolName} (${p._1.toolOptions})")
         }
-      for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns) yield {
+      for ((nameAndOpts, toBeMergedRuns) <- groupedToolRuns.toSeq) yield {
         // checks to ensure merged files do not differ in any parameters
         if (toBeMergedRuns.length > 1) {
           printWarning("\n\tFound " + toBeMergedRuns.length + " file(s) for " + nameAndOpts)
           val summaries = toBeMergedRuns.map(_._1)
           checkIfSameParameters(summaries)
           val summary = toBeMergedRuns.head._1 // take the summary of the first one
-          val allRunsWithDate = toBeMergedRuns.flatMap(p => p._2.runs zip
-            p._2.runs.indices.map(_ => p._1.startDate))
+          val allRunsWithDate = toBeMergedRuns.flatMap(p => p._2.zip(
+            p._2.indices.map(_ => p._1.startDate)))
+
+          val flatRuns = toBeMergedRuns.flatMap(_._2)
+          // there might be multiple bms with the same basename, disambiguate before proceeding
+          val uniqueRunsSeq = makeUniqueBaseNames(flatRuns)
+          
           val runsGroupedByBmName: Seq[(String, Seq[(RunInfo, Date)])] =
-            allRunsWithDate.groupBy(runs => runs._1.bmBaseName).toSeq
+            uniqueRunsSeq.map(r => r -> toBeMergedRuns.head._1.startDate).groupBy(_._1.bmBaseName).toSeq 
+          val allRunsWithDate2 = toBeMergedRuns.flatMap(p => 
+             p._2.map(r => (r, p._1.startDate))
+          )
+          
+          val uniqueRunsSeq2 = makeUniqueBaseNames(allRunsWithDate2.map(_._1))
+          val runsWithDateUnique = uniqueRunsSeq2.zip(allRunsWithDate2.map(_._2))
+          val runsGroupedByBmName2 = runsWithDateUnique.groupBy(_._1.bmBaseName).toSeq
+
           val uniqueRuns : Seq[RunInfo] =
-            for ((name, runsWithDate) <- runsGroupedByBmName) yield {
+            for ((name, runsWithDate) <- runsGroupedByBmName2) yield {
             if(runsWithDate.length > 1) {
               val resultRun : (RunInfo, Date) =
                 if (mergeYmlFiles)
@@ -678,10 +748,17 @@ object Main {
 
           printWarning("\tMerged " + nameAndOpts + ". New total: " + runs.length + " benchmarks.")
           (summary, runs)
-        } else toBeMergedRuns.head
+        } else {
+           val (sum, rSeq) = toBeMergedRuns.head
+           (sum, RunInfos(makeUniqueBaseNames(rSeq)))
+        }
       }
     }
-    else unmergedToolRuns
+    else {
+      unmergedToolRuns.map { case (sum, rSeq) =>
+        (sum, RunInfos(makeUniqueBaseNames(rSeq)))
+      }
+    }.toSeq
 
     val toolRuns = createVirtualPortfolios(toolRunsWithoutVP.toSeq)
 
@@ -970,16 +1047,14 @@ object Main {
       }
     }
 
-    if (!disableAllPlots && (doCactus || plotCactusFile)) {
+    if (!disableAllPlots && doCactusPdf) {
       println
-      println("Generating cactus plot")
       Plotting.plotCactusByTime(filteredToolRuns)
-      //Plotting.plotCactus(filteredToolRuns)
     }
-
-    if (!disableAllPlots && doCactus2) {
+    
+    if (!disableAllPlots && doCactusPlotly) {
       println()
-      Plotting.plotCactusByTime(filteredToolRuns)
+      printWarning("Cactus plot generation with Plotly is currently disabled/not implemented.")
     }
   }
 

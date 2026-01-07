@@ -51,10 +51,13 @@ object Benchmarks {
   case class RunInfo(bmName     : String,
                      expected   : Result,
                      result     : Result,
-                     duration   : Double) {
+                     duration   : Double,
+                     uniqueBaseName : Option[String] = None) {
     //name without ext where bmName = dir/bmBaseName.ext
     val bmBaseName : String = {
-      if(discardBenchmarkExtensions) {
+      if (uniqueBaseName.isDefined) {
+        uniqueBaseName.get
+      } else if(discardBenchmarkExtensions) {
         var curName = bmName.split("/").last
         var prevCurName = ""
 
