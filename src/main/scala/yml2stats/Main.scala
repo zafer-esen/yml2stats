@@ -5,8 +5,11 @@ import net.jcazevedo.moultingyaml._
 import yml2stats.Benchmarks._
 import Benchmarks.MyYamlProtocol._
 import yml2stats.parser._
+
 import java.util.Date
 import Settings._
+
+import scala.collection.mutable.ArrayBuffer
 //import org.apache.logging.log4j.core.Filter.Result
 
 object Main {
@@ -808,11 +811,17 @@ object Main {
     }
 
     val smallestRuns = toolRuns.minBy(pair => pair._2.length)
-    val commonBenchmarkNames =
-      (for (run <- smallestRuns._2.runs
-            if toolRuns.forall(p => p._2.runs.exists(run2 =>
-                                                       run2.bmBaseName == run.bmBaseName )))
-      yield run.bmBaseName).toSet
+
+    val toolRunNameSets: Iterable[Set[String]] = toolRuns.map {
+      case (_, tool) =>
+        tool.runs.iterator.map(_.bmBaseName).toSet
+    }
+
+    val smallestRunNames: Set[String] =
+      smallestRuns._2.runs.iterator.map(_.bmBaseName).toSet
+
+    val commonBenchmarkNames: Set[String] =
+      smallestRunNames.filter(name => toolRunNameSets.forall(_.contains(name)))
 
     printInfo(commonBenchmarkNames.size + " benchmarks were executed by all tools.")
 
@@ -950,7 +959,8 @@ object Main {
       }
     }
 
-    {
+    if (verbosityLevel > 0) {
+      printInfo("Running consistency checks, this might take a while...")
       def runsAreConsistent (run1 : RunInfo, run2 : RunInfo) = {
         run1.result match {
           case True if run2.result == False => false
@@ -958,28 +968,26 @@ object Main {
           case _ => true
         }
       }
-      var inconsistentCount = 0
-      println
+      val inconsistentRuns = new ArrayBuffer[String]
       for (bmName <- finalCommonBenchmarkNames) {
         val runPerTool =
           filteredToolRuns.map{case (summary, toolRuns) =>
             (summary.fullToolName ,toolRuns.getRun(bmName).get)}
         for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
           if(!runsAreConsistent(run1, run2)) {
-            inconsistentCount += 1
-            printInfo(run1.bmBaseName + " does not have consistent results in" +
-                      " all tools:\n\t" +
-                      runPerTool.map{
-                        case (tool, run) => tool + " (expected: " + run.expected +
-                                            ", result: " + run.result + ")"
-                      }.mkString("\n\t"))
+            assert(run1.expected == run2.expected)
+            inconsistentRuns +=
+              s"${run1.bmBaseName} (exp: ${run1.expected}, " +
+              s"${tool1}: ${run1.result}, " +
+              s"${tool2}: ${run2.result})"
           }
         }
       }
-      if(inconsistentCount > 0)
-        printWarning("Warning: detected " + inconsistentCount + " inconsistent runs!")
-      else
-        printInfo("No inconsistent runs detected!")
+      if(inconsistentRuns.length > 0) {
+        printWarning("\nWarning: detected " + inconsistentRuns.length + " inconsistent runs!")
+        inconsistentRuns.foreach{printWarning}
+      } else
+        printInfo("\nNo inconsistent runs detected!")
     }
 
     if(printCombinatorialResults) {

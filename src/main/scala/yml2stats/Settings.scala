@@ -21,7 +21,7 @@ object Settings {
   // default args
   var inFileName = ""
 
-  var doPortfolio                   = true
+  var doPortfolio                   = false
   var stripSafeUnsafeSuffixInTable6 = false
 //  val virtualPortfolios = Seq[VirtualPortfolio]()
   val virtualPortfolios = Seq(
@@ -66,7 +66,7 @@ object Settings {
   var doCactusPdf  = false
   var doCactusPlotly = false
 
-  var verbosityLevel        = 0 // 0 : quiet, 1 : print warnings, 2 : print information
+  var verbosityLevel = 1 // 0 : quiet, 1 : print warnings, 2 : print information
 
   // overrides all other plot settings
   var disableAllPlots            = false
