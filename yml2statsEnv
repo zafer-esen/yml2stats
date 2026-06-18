@@ -18,7 +18,7 @@ done;
 
 LAZABS_HOME=`dirname "${SOURCE}"`;
 
-export JAVA_OPTS="-Xmx2024m -Xss20000k";
+export JAVA_OPTS="-Xmx8g -Xss20000k";
 
 if [ -f ${LAZABS_HOME}/dist/yml2stats.jar ]; then
 

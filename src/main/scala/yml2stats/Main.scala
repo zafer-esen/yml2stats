@@ -81,7 +81,26 @@ object Main {
   }
 
   private def sanitizeToolNameForLatex(toolName: String): String = {
-    Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_"))
+    Settings.runtimeToolNameReplacements.getOrElse(toolName,
+      Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_")))
+  }
+
+  private def getDisplayToolName(toolName: String): String = {
+    Settings.runtimeToolNameReplacements.getOrElse(toolName, toolName)
+  }
+
+  private def renameHeader(header: String): String = {
+    Settings.headerRenames.getOrElse(header, header)
+  }
+
+  private def isColumnHidden(colKey: String): Boolean = {
+    Settings.hiddenColumns.contains(colKey.toLowerCase)
+  }
+
+  private case class Col(key: String, header: String, value: String)
+
+  private def filterCols(cols: Seq[Col]): Seq[Col] = {
+    cols.filterNot(c => isColumnHidden(c.key)).map(c => c.copy(header = renameHeader(c.header)))
   }
 
   private def sanitizeEncodingForLatex(encoding: String): String = {
@@ -92,9 +111,8 @@ object Main {
     }
   }
 
-  // A tuple for sorting runs: (tool name)
   private def getSortTuple(p: (Summary, RunInfos)): String = {
-    p._1.toolName
+    p._1.fullToolName
   }
 
   private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
@@ -102,22 +120,26 @@ object Main {
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
-    val header = if (hasIncorrect)
-      Seq("Tool", "Sat (corr)", "Unsat (corr)", "Timeout", "Error", "Unknown", "Total")
-    else
-      Seq("Tool", "Sat", "Unsat", "Timeout", "Error", "Unknown", "Total")
-
     val data = sortedRuns.map { case (summary, r) =>
       val safeStr = if (hasIncorrect) s"${r.satRuns.length} (${r.correctSatRuns.length})" else s"${r.satRuns.length}"
       val unsafeStr = if (hasIncorrect) s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})" else s"${r.unsatRuns.length}"
-      val timeoutStr = s"${r.timeoutRuns.length}"
-      val errorStr = s"${r.errorRuns.length}"
-      val unknownStr = s"${r.unknownRuns.length}"
-      val totalStr = s"${r.runs.length}"
-      Seq(summary.toolName, safeStr, unsafeStr, timeoutStr, errorStr, unknownStr, totalStr)
+      val allCols = Seq(
+        Col("tool", "Tool", getDisplayToolName(summary.fullToolName)),
+        Col("sat", if (hasIncorrect) "Sat (corr)" else "Sat", safeStr),
+        Col("unsat", if (hasIncorrect) "Unsat (corr)" else "Unsat", unsafeStr),
+        Col("timeout", "Timeout", s"${r.timeoutRuns.length}"),
+        Col("error", "Error", s"${r.errorRuns.length}"),
+        Col("unknown", "Unknown", s"${r.unknownRuns.length}"),
+        Col("total", "Total", s"${r.runs.length}")
+      )
+      filterCols(allCols)
     }
 
-    val allRows = header +: data
+    if (data.isEmpty) return
+    val header = data.head.map(_.header)
+    val rows = data.map(_.map(_.value))
+
+    val allRows = header +: rows
     val colWidths = allRows.transpose.map(col => col.map(_.length).max)
 
     def pad(s: String, width: Int) = s.padTo(width, ' ')
@@ -125,7 +147,7 @@ object Main {
     println(header.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
     println(colWidths.map(w => "-" * w).mkString("-|-"))
 
-    data.foreach { row =>
+    rows.foreach { row =>
       println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
     }
   }
@@ -169,7 +191,7 @@ object Main {
 
     println("\nLegend:")
     summaries.zipWithIndex.foreach { case (summary, i) =>
-      println(f"(${(i + 1)}%2d): ${summary.toolName}")
+      println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
     }
   }
 
@@ -179,33 +201,36 @@ object Main {
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
-    val headerRow = if (hasIncorrect)
-      "Tool & Sat (corr) & Unsat (corr) & Timeout & Error & Unknown & Total \\\\ \\midrule"
-    else
-      "Tool & Sat & Unsat & Timeout & Error & Unknown & Total \\\\ \\midrule"
-
-    val dataRows = sortedRuns.map { case (summary, r) =>
-      val safeTotal = r.satRuns.length
-      val safeCorrect = r.correctSatRuns.length
-      val unsafeTotal = r.unsatRuns.length
-      val unsafeCorrect = r.correctUnsatRuns.length
-      val timeout = r.timeoutRuns.length
-      val error = r.errorRuns.length
-      val unknown = r.unknownRuns.length
-      val total = r.runs.length
+    val data = sortedRuns.map { case (summary, r) =>
       val toolName = sanitizeToolNameForLatex(summary.toolName)
+      val safeStr = if (hasIncorrect) s"${r.satRuns.length} (${r.correctSatRuns.length})" else s"${r.satRuns.length}"
+      val unsafeStr = if (hasIncorrect) s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})" else s"${r.unsatRuns.length}"
+      val allCols = Seq(
+        Col("tool", "Tool", toolName),
+        Col("sat", if (hasIncorrect) "Sat (corr)" else "Sat", safeStr),
+        Col("unsat", if (hasIncorrect) "Unsat (corr)" else "Unsat", unsafeStr),
+        Col("timeout", "Timeout", s"${r.timeoutRuns.length}"),
+        Col("error", "Error", s"${r.errorRuns.length}"),
+        Col("unknown", "Unknown", s"${r.unknownRuns.length}"),
+        Col("total", "Total", s"${r.runs.length}")
+      )
+      filterCols(allCols)
+    }
 
-      val safeStr = if (hasIncorrect) s"$safeTotal ($safeCorrect)" else s"$safeTotal"
-      val unsafeStr = if (hasIncorrect) s"$unsafeTotal ($unsafeCorrect)" else s"$unsafeTotal"
+    if (data.isEmpty) return
+    val header = data.head.map(_.header)
+    val numCols = header.length
 
-      s"$toolName & $safeStr & $unsafeStr & $timeout & $error & $unknown & $total \\\\"
-    }.mkString("\n")
+    val headerRow = header.mkString(" & ") + " \\\\ \\midrule"
+    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\").mkString("\n")
+    val colSpec = "l" + "r" * (numCols - 1)
+
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Combined Results Summary}
          |  \\label{tbl:combined-results-summary}
-         |  \\begin{tabular}{lrrrrrrr}
+         |  \\begin{tabular}{$colSpec}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -286,28 +311,27 @@ object Main {
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
-    var header = Seq("Tool", "Sat", "Unsat")
-    if (hasIncorrect) {
-      header = header :+ "Incorrect"
-    }
-    header = header ++ Seq("Unknown", "Total")
-
     val data = sortedRuns.map { case (summary, r) =>
-      val safeCorrect = r.correctSatRuns.length
-      val unsafeCorrect = r.correctUnsatRuns.length
-      val incorrect = r.incorrectRuns.length
-      val unknownStr = s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"
-      val totalStr = s"${r.runs.length}"
-
-      var row = Seq(summary.toolName, safeCorrect.toString, unsafeCorrect.toString)
+      var allCols = Seq(
+        Col("tool", "Tool", getDisplayToolName(summary.fullToolName)),
+        Col("sat", "Sat", s"${r.correctSatRuns.length}"),
+        Col("unsat", "Unsat", s"${r.correctUnsatRuns.length}")
+      )
       if (hasIncorrect) {
-        row = row :+ incorrect.toString
+        allCols = allCols :+ Col("incorrect", "Incorrect", s"${r.incorrectRuns.length}")
       }
-      row = row ++ Seq(unknownStr, totalStr)
-      row
+      allCols = allCols ++ Seq(
+        Col("unknown", "Unknown", s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"),
+        Col("total", "Total", s"${r.runs.length}")
+      )
+      filterCols(allCols)
     }
 
-    val allRows = header +: data
+    if (data.isEmpty) return
+    val header = data.head.map(_.header)
+    val rows = data.map(_.map(_.value))
+
+    val allRows = header +: rows
     val colWidths = allRows.transpose.map(col => col.map(_.length).max)
 
     def pad(s: String, width: Int) = s.padTo(width, ' ')
@@ -315,7 +339,7 @@ object Main {
     println(header.zip(colWidths).map { case (h, w) => pad(h, w) }.mkString(" | "))
     println(colWidths.map(w => "-" * w).mkString("-|-"))
 
-    data.foreach { row =>
+    rows.foreach { row =>
       println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
     }
   }
@@ -323,22 +347,40 @@ object Main {
   private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = runs.sortBy(getSortTuple)
-    val headerRow = "Tool & Sat & Unsat & Incorrect & Unknown & Total \\\\ \\midrule"
-    val dataRows = sortedRuns.map { case (summary, r) =>
-      val safeCorrect = r.correctSatRuns.length
-      val unsafeCorrect = r.correctUnsatRuns.length
-      val incorrect = r.incorrectRuns.length
-      val unknown = r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length
-      val total = r.runs.length
+
+    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+
+    val data = sortedRuns.map { case (summary, r) =>
       val toolName = sanitizeToolNameForLatex(summary.toolName)
-      s"$toolName & $safeCorrect & $unsafeCorrect & $incorrect & $unknown & $total \\\\"
-    }.mkString("\n")
+      var allCols = Seq(
+        Col("tool", "Tool", toolName),
+        Col("sat", "Sat", s"${r.correctSatRuns.length}"),
+        Col("unsat", "Unsat", s"${r.correctUnsatRuns.length}")
+      )
+      if (hasIncorrect) {
+        allCols = allCols :+ Col("incorrect", "Incorrect", s"${r.incorrectRuns.length}")
+      }
+      allCols = allCols ++ Seq(
+        Col("unknown", "Unknown", s"${r.unknownRuns.length + r.errorRuns.length + r.timeoutRuns.length}"),
+        Col("total", "Total", s"${r.runs.length}")
+      )
+      filterCols(allCols)
+    }
+
+    if (data.isEmpty) return
+    val header = data.head.map(_.header)
+    val numCols = header.length
+
+    val headerRow = header.mkString(" & ") + " \\\\ \\midrule"
+    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\").mkString("\n")
+    val colSpec = "l" + "r" * (numCols - 1)
+
     val latexTableString =
       s"""\\begin{table}[h]
          |  \\centering
          |  \\caption{Simplified Combined Results Summary}
          |  \\label{tbl:combined-results-summary-simple}
-         |  \\begin{tabular}{lrrrrr}
+         |  \\begin{tabular}{$colSpec}
          |    \\toprule
          |    $headerRow
          |    $dataRows \\\\
@@ -390,7 +432,7 @@ object Main {
 
     println("\nLegend:")
     summaries.zipWithIndex.foreach { case (summary, i) =>
-      println(f"(${(i + 1)}%2d): ${summary.toolName}")
+      println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
     }
   }
 
@@ -434,6 +476,68 @@ object Main {
          |\\end{table}
          |""".stripMargin
     println(latexTableString)
+  }
+
+  private def printErrorsFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    val sortedRuns = runs.sortBy(getSortTuple)
+    var first = true
+    for ((summary, r) <- sortedRuns if r.errorRuns.nonEmpty) {
+      if (!first) println()
+      first = false
+      println(s"${summary.fullToolName} (${r.errorRuns.length} errors):")
+      for (run <- r.errorRuns) {
+        val err = run.result.asInstanceOf[Error]
+        val typesStr = if (err.errorTypes.nonEmpty)
+          err.errorTypes.mkString(", ")
+        else "Unknown"
+        // Take first non-empty, non-trivial line from error message as short message
+        val shortMsg = err.errorMsg.linesIterator
+          .map(_.trim)
+          .find(l => l.nonEmpty && (l.toLowerCase.contains("error") ||
+                                    l.toLowerCase.contains("exception") ||
+                                    l.toLowerCase.contains("fault") ||
+                                    l.toLowerCase.contains("memory") ||
+                                    l.toLowerCase.contains("failed")))
+          .getOrElse(err.errorMsg.linesIterator.find(_.trim.nonEmpty).getOrElse(""))
+        val truncatedMsg = if (shortMsg.length > 80) shortMsg.take(77) + "..." else shortMsg
+        println(s"  ${run.bmBaseName}: [$typesStr] $truncatedMsg")
+      }
+    }
+    if (first) println("No errors found.")
+  }
+
+  private def printInconsistentFormat(
+    filteredToolRuns: Seq[(Summary, RunInfos)],
+    finalCommonBenchmarkNames: Set[String]
+  ): Unit = {
+    def runsAreConsistent(run1: RunInfo, run2: RunInfo) = {
+      run1.result match {
+        case True if run2.result == False => false
+        case False if run2.result == True => false
+        case _ => true
+      }
+    }
+    val inconsistentRuns = new ArrayBuffer[String]
+    for (bmName <- finalCommonBenchmarkNames) {
+      val runPerTool =
+        filteredToolRuns.map { case (summary, toolRuns) =>
+          (summary.fullToolName, toolRuns.getRun(bmName).get)
+        }
+      for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
+        if (!runsAreConsistent(run1, run2)) {
+          inconsistentRuns +=
+            s"${run1.bmBaseName}: expected=${run1.expected}, " +
+            s"$tool1=${run1.result}, " +
+            s"$tool2=${run2.result}"
+        }
+      }
+    }
+    if (inconsistentRuns.nonEmpty) {
+      println(s"${inconsistentRuns.length} inconsistent result(s):")
+      inconsistentRuns.sorted.foreach(s => println(s"  $s"))
+    } else {
+      println("No inconsistent results.")
+    }
   }
 
   /**
@@ -509,10 +613,16 @@ object Main {
          |  -details-tex  : Print detailed per-benchmark results in LaTeX format.
          |  -matrix       : Print matrix of comparative results in text format.
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
+         |  -errors       : Print benchmarks that had errors, with error messages.
+         |  -inconsistent : Print benchmarks with inconsistent results across tools.
+         |  -errors-as-errors : Exclude error benchmarks from comparisons (don't treat them as unknown).
          |  -cactus-pdf   : Generate a cactus plot in PDF format.
          |  -cactus-plotly: Generate a cactus plot using Plotly (DISABLED).
          |  -v            : Set verbosity level to 1 (warnings).
          |  -v:N          : Set verbosity level to N (0=quiet, 1=warnings, 2=info).
+         |  -rename-tool:FROM=TO  : Rename a tool in output (repeatable).
+         |  -rename-header:FROM=TO : Rename a column header (repeatable).
+         |  -hide-col:NAME : Hide a column by key: sat, unsat, incorrect, timeout, error, unknown, total (repeatable).
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -549,6 +659,15 @@ object Main {
         case "-matrixtex" :: tail =>
           doMatrixTex = true
           remainingArgs = tail
+        case "-errors" :: tail =>
+          doErrors = true
+          remainingArgs = tail
+        case "-inconsistent" :: tail =>
+          doInconsistent = true
+          remainingArgs = tail
+        case "-errors-as-errors" :: tail =>
+          excludeErrors = true
+          remainingArgs = tail
         case "-cactus-plotly" :: tail =>
           doCactusPlotly = true
           remainingArgs = tail
@@ -568,6 +687,23 @@ object Main {
               return
           }
           remainingArgs = tail
+        case opt :: tail if opt.startsWith("-rename-tool:") =>
+          val spec = opt.substring("-rename-tool:".length)
+          val eqIdx = spec.indexOf('=')
+          if (eqIdx > 0) {
+            Settings.runtimeToolNameReplacements(spec.substring(0, eqIdx)) = spec.substring(eqIdx + 1)
+          }
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-rename-header:") =>
+          val spec = opt.substring("-rename-header:".length)
+          val eqIdx = spec.indexOf('=')
+          if (eqIdx > 0) {
+            Settings.headerRenames(spec.substring(0, eqIdx)) = spec.substring(eqIdx + 1)
+          }
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-hide-col:") =>
+          Settings.hiddenColumns += opt.substring("-hide-col:".length).toLowerCase
+          remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
           println(usage)
@@ -583,7 +719,7 @@ object Main {
       }
     }
 
-    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doCactusPdf && !doCactusPlotly) {
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doErrors && !doInconsistent && !doCactusPdf && !doCactusPlotly) {
       doTable5Text = true
     }
 
@@ -606,33 +742,33 @@ object Main {
       List(in)
     }
 
-    val yamlAsts = for (file <- files if file.getName.endsWith(".yml")) yield {
+    val ymlFiles = files.filter(_.getName.endsWith(".yml"))
 
-      val inFile = Source.fromFile(file)
-      val source = inFile.getLines.mkString("\n")
-
-      inFile.close
-
-      try {
-        (file.getName, source.parseYaml)
-      } catch {
-        case _ : Throwable =>
-          throw new Exception("Could not parse " + file.getName)
-      }
-
-    }
-
-    if (yamlAsts.isEmpty) {
+    if (ymlFiles.isEmpty) {
       println("No .yml files found in " + inFileName)
       return
     }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Convert YAML ASTs into useful data structures
+// Read YAML files and convert into useful data structures (one file at a time
+// to avoid keeping all raw YAML data in memory simultaneously)
 
     val unmergedToolRuns : Seq[(Summary, Seq[RunInfo])] =
-      for ((fileName, ast) <- yamlAsts) yield {
+      for (file <- ymlFiles) yield {
+        val fileName = file.getName
         printInfo("Processing " + fileName + "...")
+
+        val inFile = Source.fromFile(file)
+        val source = inFile.getLines.mkString("\n")
+        inFile.close
+
+        val ast = try {
+          source.parseYaml
+        } catch {
+          case _ : Throwable =>
+            throw new Exception("Could not parse " + fileName)
+        }
+
         val (rawSummary, rawRunInfos) =
           ast.convertTo[(SummaryRaw, Seq[RunInfoRaw])]
 
@@ -956,6 +1092,14 @@ object Main {
     if (doMatrixTex) {
       printSep()
       printMatrixLatexFormat(filteredToolRuns)
+    }
+    if (doErrors) {
+      printSep()
+      printErrorsFormat(filteredToolRuns)
+    }
+    if (doInconsistent) {
+      printSep()
+      printInconsistentFormat(filteredToolRuns, finalCommonBenchmarkNames)
     }
 
     for ((summary, runs) <- filteredToolRuns) {

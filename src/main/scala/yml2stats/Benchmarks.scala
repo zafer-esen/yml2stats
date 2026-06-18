@@ -188,7 +188,7 @@ object Benchmarks {
                      scriptDir     : String,
                      notes         : String,
                      ymlFileName   : String) {
-    def fullToolName = s"$toolName ${if (ignoreDifferentNotes) "" else notes}"
+    def fullToolName = s"$toolName${if (ignoreDifferentNotes || notes.isEmpty) "" else s" [$notes]"}".trim
     override def toString: String =
       toolName + " (" + toolOptions + ") on " + startDate +
         (if(notes.nonEmpty) (" (" + notes + ")") else "") +

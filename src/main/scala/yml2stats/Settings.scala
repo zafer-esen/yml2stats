@@ -65,6 +65,8 @@ object Settings {
   var doMatrixTex  = false
   var doCactusPdf  = false
   var doCactusPlotly = false
+  var doErrors     = false
+  var doInconsistent = false
 
   var verbosityLevel = 1 // 0 : quiet, 1 : print warnings, 2 : print information
 
@@ -159,6 +161,11 @@ object Settings {
 
   // enable dev. assertions
   var assertsOn = true
+
+  // Runtime overrides from CLI flags
+  val runtimeToolNameReplacements = scala.collection.mutable.Map[String, String]()
+  val headerRenames = scala.collection.mutable.Map[String, String]()
+  val hiddenColumns = scala.collection.mutable.Set[String]()
 
   // Create a map from the sort order list for efficient lookups.
   def getCleanEncodingName(encoding: String): String = {
