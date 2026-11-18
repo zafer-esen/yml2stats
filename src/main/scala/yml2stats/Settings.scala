@@ -1,6 +1,6 @@
 package yml2stats
 
-import yml2stats.Benchmarks.Summary
+import yml2stats.Benchmarks.{Result, Summary}
 
 //import plotly.kaleido
 //import plotly.element._
@@ -19,7 +19,8 @@ case class CactusPlotDisplayOptions(
 
 object Settings {
   // default args
-  var inFileName = ""
+  // one group per input file or directory, e.g. a category of benchmarks
+  val inFileNames = scala.collection.mutable.ArrayBuffer[String]()
 
   var doPortfolio                   = false
   var stripSafeUnsafeSuffixInTable6 = false
@@ -63,10 +64,25 @@ object Settings {
   var doTable5SimpleTex  = false
   var doMatrixText = false
   var doMatrixTex  = false
+  var doMatrixDiff = false
   var doCactusPdf  = false
   var doCactusPlotly = false
   var doErrors     = false
   var doInconsistent = false
+  var doOverviewText = false
+  var doOverviewTex  = false
+  var doUniqueText = false
+  var doUniqueTex  = false
+  // tools left out of the best values of a group
+  var noBestTools = Seq[String]()
+  // groups after which LaTeX tables with a row per group have a \midrule
+  val midruleAfterGroups = scala.collection.mutable.Set[String]()
+  // pairs of a tool and another tool compared over all groups
+  var comparisonsText = Seq[(String, String)]()
+  var comparisonsTex  = Seq[(String, String)]()
+  // base tools of the runtime comparisons over all groups
+  var runtimeBasesText = Seq[String]()
+  var runtimeBasesTex  = Seq[String]()
 
   var verbosityLevel = 1 // 0 : quiet, 1 : print warnings, 2 : print information
 
@@ -134,6 +150,15 @@ object Settings {
   var considerSolveErrorsUnknown = false
   var considerOutOfMemErrorUnknown = false
   var considerKilledAsTimeout = true
+  // a killed run that ended before the wall time limit, with its peak memory
+  // at least this fraction of the memory limit, counts as out of memory
+  var memoryKillRssFraction = 0.9
+  // a run with a nonzero exit code or killed before the wall time limit,
+  // other than for its memory, is an error for every output parser
+  var crashesAsErrors = false
+  // a run with the result unknown that lasted at least these seconds is a
+  // timeout, e.g. of a tool with its own time limit below the wall time limit
+  var unknownAsTimeoutAfter : Option[Double] = None
 
   // merge yml files that were run using the same tool name and tool options.
   var mergeYmlFiles         = false
@@ -166,6 +191,14 @@ object Settings {
   val runtimeToolNameReplacements = scala.collection.mutable.Map[String, String]()
   val headerRenames = scala.collection.mutable.Map[String, String]()
   val hiddenColumns = scala.collection.mutable.Set[String]()
+  // created in addition to virtualPortfolios, which need doPortfolio
+  val portfoliosFromArgs = scala.collection.mutable.ArrayBuffer[VirtualPortfolio]()
+  // the tools of the tables in their order, all tools by name if empty
+  var selectedTools = Seq[String]()
+  // expected verdicts by benchmark name, in place of those in the logs
+  val expectedVerdicts = scala.collection.mutable.Map[String, Result]()
+  // incorrect verdicts not counted as solved, also by portfolios
+  var incorrectAsUnsolved = false
 
   // Create a map from the sort order list for efficient lookups.
   def getCleanEncodingName(encoding: String): String = {

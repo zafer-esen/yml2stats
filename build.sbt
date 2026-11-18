@@ -7,6 +7,8 @@ lazy val root = (project in file("."))
   .settings(
     name := "yml2stats",
     libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "test",
+    // the settings are global, so test suites run one at a time
+    Test / parallelExecution := false,
     libraryDependencies += "net.jcazevedo" %% "moultingyaml" % "0.4.2",
     //libraryDependencies += "org.plotly-scala" %% "plotly-render" % "0.8.2",
     //libraryDependencies += "org.plotly-scala" %% "kaleido" % "0.1.0", // kaleido bindings for scala for generating images in png, svg etc.

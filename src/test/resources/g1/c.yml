@@ -1,0 +1,38 @@
+- toolName: c
+  toolVersion: '1'
+  toolOptions: ''
+  cpuTimeLimit: 20 s
+  wallTimeLimit: 10 s
+  os: Linux
+  cpuModel: cpu
+  cpuCount: '1'
+  architecture: x86_64
+  memTotal: 1000 kB
+  startDate: '2026-11-15 12:00:00'
+  scriptDir: /benchmarks
+  notes: ''
+- - bmName: dir/p1.smt2
+    expected: sat
+    toolOutput:
+    - unknown
+    duration: 3.0 s
+  - bmName: dir/p2.smt2
+    expected: unsat
+    toolOutput:
+    - unknown
+    duration: 3.0 s
+  - bmName: dir/p3.smt2
+    expected: unsat
+    toolOutput:
+    - unknown
+    duration: 3.0 s
+  - bmName: dir/p4.smt2
+    expected: sat
+    toolOutput:
+    - unknown
+    duration: 3.0 s
+  - bmName: dir/p5.smt2
+    expected: sat
+    toolOutput:
+    - sat
+    duration: 3.0 s

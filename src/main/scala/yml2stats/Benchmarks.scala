@@ -22,16 +22,18 @@ object Benchmarks {
                         memTotal      : String, // todo: int in MB?
                         startDate     : String,
                         scriptDir     : String,
-                        notes         : String)
+                        notes         : String,
+                        memLimit      : Option[String] = None)
 
   case class RunInfoRaw(bmName     : String,
                         expected   : String,
                         toolOutput : Seq[String],
-                        duration   : String)
+                        duration   : String,
+                        maxRss     : Option[String] = None)
 
   object MyYamlProtocol extends DefaultYamlProtocol {
-    implicit val summaryFormat = yamlFormat13(SummaryRaw)
-    implicit val runInfoFormat = yamlFormat4(RunInfoRaw)
+    implicit val summaryFormat = yamlFormat14(SummaryRaw)
+    implicit val runInfoFormat = yamlFormat5(RunInfoRaw)
   }
 
   trait Result
@@ -70,6 +72,10 @@ object Benchmarks {
         curName
       } else bmName
     }
+
+    // a verdict that contradicts the expected verdict
+    def isIncorrect : Boolean =
+      result == True && expected == False || result == False && expected == True
   }
 
   object RunInfos {
@@ -94,6 +100,9 @@ object Benchmarks {
                  val errorRuns : Seq[RunInfo],
                  val timeoutRuns : Seq[RunInfo]) {
     val length      = runs.length
+
+    val memoutRuns = errorRuns.filter(run =>
+      run.result.asInstanceOf[Error].errorTypes contains ErrorType.OutOfMemory)
 
     val unsoundRuns =
       satRuns.filter(run => run.expected == False)
@@ -167,6 +176,7 @@ object Benchmarks {
         raw.cpuCount.toInt,
         raw.architecture,
         raw.memTotal,
+        raw.memLimit.map(Util.kiloBytes),
         dateFormat.parse(raw.startDate),
         raw.scriptDir,
         raw.notes,
@@ -184,6 +194,7 @@ object Benchmarks {
                      cpuCount      : Int,
                      architecture  : String,
                      memTotal      : String, // todo: int in MB?
+                     memLimitKB    : Option[Long],
                      startDate     : java.util.Date,
                      scriptDir     : String,
                      notes         : String,
@@ -194,4 +205,8 @@ object Benchmarks {
         (if(notes.nonEmpty) (" (" + notes + ")") else "") +
         " (" + ymlFileName + ")"
   }
+
+  case class Group(name           : String,
+                   toolRuns       : Seq[(Summary, RunInfos)],
+                   benchmarkNames : Set[String])
 }

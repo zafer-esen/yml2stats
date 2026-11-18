@@ -80,13 +80,8 @@ object Main {
     }.toSeq
   }
 
-  private def sanitizeToolNameForLatex(toolName: String): String = {
-    Settings.runtimeToolNameReplacements.getOrElse(toolName,
-      Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_")))
-  }
-
-  private def getDisplayToolName(toolName: String): String = {
-    Settings.runtimeToolNameReplacements.getOrElse(toolName, toolName)
+  private[yml2stats] def sanitizeToolNameForLatex(toolName: String): String = {
+    Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_"))
   }
 
   private def renameHeader(header: String): String = {
@@ -97,9 +92,9 @@ object Main {
     Settings.hiddenColumns.contains(colKey.toLowerCase)
   }
 
-  private case class Col(key: String, header: String, value: String)
+  private[yml2stats] case class Col(key: String, header: String, value: String)
 
-  private def filterCols(cols: Seq[Col]): Seq[Col] = {
+  private[yml2stats] def filterCols(cols: Seq[Col]): Seq[Col] = {
     cols.filterNot(c => isColumnHidden(c.key)).map(c => c.copy(header = renameHeader(c.header)))
   }
 
@@ -111,27 +106,49 @@ object Main {
     }
   }
 
-  private def getSortTuple(p: (Summary, RunInfos)): String = {
-    p._1.fullToolName
-  }
+  // the rows by name, or with -tools in the order of the selection
+  private def inTableOrder(runs: Seq[(Summary, RunInfos)]): Seq[(Summary, RunInfos)] =
+    if (selectedTools.isEmpty) runs.sortBy(_._1.fullToolName) else runs
+
+  // a run killed at a cgroup memory limit has no error message, only its
+  // peak memory close to the limit
+  private def isMemoryKill(run : RunInfoRaw, duration : Double,
+                           summary : Summary) : Boolean =
+    run.toolOutput.contains("killed") && duration < summary.wallTimeLimit &&
+    (for (maxRss <- run.maxRss; memLimitKB <- summary.memLimitKB)
+     yield Util.kiloBytes(maxRss) >= memoryKillRssFraction * memLimitKB)
+      .getOrElse(false)
+
+  // a nonzero exit code, written as "other error", without an error of the
+  // output parser, or killed before the wall time limit without a verdict
+  private def isCrash(run : RunInfoRaw, parsed : Result, duration : Double,
+                      summary : Summary) : Boolean =
+    run.toolOutput.exists(_.startsWith("other error")) && !parsed.isInstanceOf[Error] ||
+    parsed == Timeout && run.toolOutput.contains("killed") &&
+    duration < summary.wallTimeLimit
 
   private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
 
-    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+    val hasIncorrect =
+      !incorrectAsUnsolved && runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
     val data = sortedRuns.map { case (summary, r) =>
-      val safeStr = if (hasIncorrect) s"${r.satRuns.length} (${r.correctSatRuns.length})" else s"${r.satRuns.length}"
-      val unsafeStr = if (hasIncorrect) s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})" else s"${r.unsatRuns.length}"
+      val satCount = if (incorrectAsUnsolved) r.correctSatRuns.length else r.satRuns.length
+      val unsatCount = if (incorrectAsUnsolved) r.correctUnsatRuns.length else r.unsatRuns.length
+      val safeStr = if (hasIncorrect) s"$satCount (${r.correctSatRuns.length})" else s"$satCount"
+      val unsafeStr = if (hasIncorrect) s"$unsatCount (${r.correctUnsatRuns.length})" else s"$unsatCount"
       val allCols = Seq(
-        Col("tool", "Tool", getDisplayToolName(summary.fullToolName)),
+        Col("tool", "Tool", summary.fullToolName),
         Col("sat", if (hasIncorrect) "Sat (corr)" else "Sat", safeStr),
         Col("unsat", if (hasIncorrect) "Unsat (corr)" else "Unsat", unsafeStr),
+        Col("incorrect", "Incorrect", s"${r.incorrectRuns.length}"),
         Col("timeout", "Timeout", s"${r.timeoutRuns.length}"),
-        Col("error", "Error", s"${r.errorRuns.length}"),
+        Col("memout", "Memout", s"${r.memoutRuns.length}"),
+        Col("error", "Error", s"${r.errorRuns.length - r.memoutRuns.length}"),
         Col("unknown", "Unknown", s"${r.unknownRuns.length}"),
         Col("total", "Total", s"${r.runs.length}")
-      )
+      ).filter(col => incorrectAsUnsolved || col.key != "incorrect")
       filterCols(allCols)
     }
 
@@ -153,7 +170,7 @@ object Main {
   }
 
   private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    val orderedRuns = runs.sortBy(getSortTuple)
+    val orderedRuns = inTableOrder(runs)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
 
@@ -197,23 +214,28 @@ object Main {
 
   private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
 
-    val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
+    val hasIncorrect =
+      !incorrectAsUnsolved && runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
     val data = sortedRuns.map { case (summary, r) =>
       val toolName = sanitizeToolNameForLatex(summary.toolName)
-      val safeStr = if (hasIncorrect) s"${r.satRuns.length} (${r.correctSatRuns.length})" else s"${r.satRuns.length}"
-      val unsafeStr = if (hasIncorrect) s"${r.unsatRuns.length} (${r.correctUnsatRuns.length})" else s"${r.unsatRuns.length}"
+      val satCount = if (incorrectAsUnsolved) r.correctSatRuns.length else r.satRuns.length
+      val unsatCount = if (incorrectAsUnsolved) r.correctUnsatRuns.length else r.unsatRuns.length
+      val safeStr = if (hasIncorrect) s"$satCount (${r.correctSatRuns.length})" else s"$satCount"
+      val unsafeStr = if (hasIncorrect) s"$unsatCount (${r.correctUnsatRuns.length})" else s"$unsatCount"
       val allCols = Seq(
         Col("tool", "Tool", toolName),
         Col("sat", if (hasIncorrect) "Sat (corr)" else "Sat", safeStr),
         Col("unsat", if (hasIncorrect) "Unsat (corr)" else "Unsat", unsafeStr),
+        Col("incorrect", "Incorrect", s"${r.incorrectRuns.length}"),
         Col("timeout", "Timeout", s"${r.timeoutRuns.length}"),
-        Col("error", "Error", s"${r.errorRuns.length}"),
+        Col("memout", "Memout", s"${r.memoutRuns.length}"),
+        Col("error", "Error", s"${r.errorRuns.length - r.memoutRuns.length}"),
         Col("unknown", "Unknown", s"${r.unknownRuns.length}"),
         Col("total", "Total", s"${r.runs.length}")
-      )
+      ).filter(col => incorrectAsUnsolved || col.key != "incorrect")
       filterCols(allCols)
     }
 
@@ -246,7 +268,7 @@ object Main {
             "LaTeX preamble:\n\\usepackage{rotating}" +
             "\n\\usepackage{booktabs}\n\\usepackage{longtable}" +
             "\n\\usepackage{xcolor}\n")
-    val orderedRuns = runs.sortBy(getSortTuple)
+    val orderedRuns = inTableOrder(runs)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
     val numTools = summaries.size
@@ -307,13 +329,13 @@ object Main {
   }
 
   private def printTable5SimpleTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
     val data = sortedRuns.map { case (summary, r) =>
       var allCols = Seq(
-        Col("tool", "Tool", getDisplayToolName(summary.fullToolName)),
+        Col("tool", "Tool", summary.fullToolName),
         Col("sat", "Sat", s"${r.correctSatRuns.length}"),
         Col("unsat", "Unsat", s"${r.correctUnsatRuns.length}")
       )
@@ -346,7 +368,7 @@ object Main {
 
   private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
 
@@ -392,7 +414,7 @@ object Main {
   }
 
   private def printMatrixTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
     val summaries = sortedRuns.map(_._1)
 
     if (summaries.isEmpty) {
@@ -436,10 +458,44 @@ object Main {
     }
   }
 
+  // per ordered pair of tools, the benchmarks solved by the first and not by
+  // the second
+  private def printMatrixDiffFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
+    val sortedRuns = inTableOrder(runs)
+
+    if (sortedRuns.size < 2) {
+      println("At least two tools are needed for -matrix-diff.")
+      return
+    }
+
+    var anyFound = false
+    for (((summaryA, runsA), i) <- sortedRuns.zipWithIndex;
+         ((summaryB, runsB), j) <- sortedRuns.zipWithIndex if i != j) {
+      val diff = runsA - runsB
+      val sat = diff.correctSatRuns
+      val unsat = diff.correctUnsatRuns
+      if (sat.nonEmpty || unsat.nonEmpty) {
+        anyFound = true
+        println(s"${summaryA.fullToolName} solved but ${summaryB.fullToolName} did not " +
+                s"(${sat.length} sat, ${unsat.length} unsat):")
+        for ((label, group) <- Seq(("sat", sat), ("unsat", unsat)) if group.nonEmpty) {
+          for (run <- group.sortBy(_.bmBaseName)) {
+            val other = runsB.getRun(run.bmBaseName)
+                             .map(_.result.toString).getOrElse("not run")
+            println(f"  $label%-5s ${run.bmName}%s    [${summaryB.toolName}: $other]")
+          }
+        }
+        println()
+      }
+    }
+    if (!anyFound)
+      println("Every tool solved the same benchmarks.")
+  }
+
   private def printMatrixLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     println("% For this table, please include \\usepackage{booktabs} and " +
             "\\usepackage{rotating} in your LaTeX preamble.")
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
     val summaries = sortedRuns.map(_._1)
     val numTools = summaries.size
 
@@ -479,7 +535,7 @@ object Main {
   }
 
   private def printErrorsFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    val sortedRuns = runs.sortBy(getSortTuple)
+    val sortedRuns = inTableOrder(runs)
     var first = true
     for ((summary, r) <- sortedRuns if r.errorRuns.nonEmpty) {
       if (!first) println()
@@ -519,9 +575,10 @@ object Main {
     }
     val inconsistentRuns = new ArrayBuffer[String]
     for (bmName <- finalCommonBenchmarkNames) {
+      // over several groups, a tool may have no run of the benchmark
       val runPerTool =
-        filteredToolRuns.map { case (summary, toolRuns) =>
-          (summary.fullToolName, toolRuns.getRun(bmName).get)
+        filteredToolRuns.flatMap { case (summary, toolRuns) =>
+          toolRuns.getRun(bmName).map(run => (summary.fullToolName, run))
         }
       for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
         if (!runsAreConsistent(run1, run2)) {
@@ -540,23 +597,32 @@ object Main {
     }
   }
 
+  private def activePortfolios : Seq[VirtualPortfolio] =
+    (if (Settings.doPortfolio) Settings.virtualPortfolios else Nil) ++
+      Settings.portfoliosFromArgs
+
+  private def isConstituent(portfolio : VirtualPortfolio, summary : Summary) : Boolean = {
+    val toolMatch = portfolio.tools.contains("all") || toolNames(summary).exists(portfolio.tools.contains)
+    val encodingMatch = portfolio.encodings.contains("all") || portfolio.encodings.contains(getCleanEncodingName(summary.notes))
+    toolMatch && encodingMatch
+  }
+
   /**
    * Creates virtual portfolios based on definitions in Settings.
    * A portfolio's result for a benchmark is the result of the fastest
    * constituent run that solved it.
    */
   private def createVirtualPortfolios(runs: Seq[(Summary, RunInfos)]): Seq[(Summary, RunInfos)] = {
-    if (Settings.virtualPortfolios.isEmpty || !Settings.doPortfolio) {
+    val portfolios = activePortfolios
+    if (portfolios.isEmpty) {
       return runs
     }
 
-    val newPortfolios = for (portfolio <- Settings.virtualPortfolios) yield {
+    val newPortfolios = for (portfolio <- portfolios) yield {
       printInfo(s"Creating virtual portfolio: ${portfolio.name}")
 
       val constituentRuns = runs.filter { case (summary, _) =>
-        val toolMatch = portfolio.tools.contains("all") || portfolio.tools.contains(summary.toolName)
-        val encodingMatch = portfolio.encodings.contains("all") || portfolio.encodings.contains(getCleanEncodingName(summary.notes))
-        toolMatch && encodingMatch
+        isConstituent(portfolio, summary)
       }
 
       if (constituentRuns.isEmpty) {
@@ -568,7 +634,8 @@ object Main {
         val portfolioRunInfos = for (bmName <- allBenchmarkNames.toList) yield {
           val candidateRuns = constituentRuns.flatMap(_._2.getRun(bmName))
 
-          val solvedRuns = candidateRuns.filter(r => r.result == True || r.result == False)
+          val solvedRuns = candidateRuns.filter(r =>
+            (r.result == True || r.result == False) && !(incorrectAsUnsolved && r.isIncorrect))
 
           val bestRun = if (solvedRuns.nonEmpty) {
             solvedRuns.minBy(_.duration)
@@ -576,6 +643,7 @@ object Main {
             // Fallback logic
             candidateRuns.find(_.result == Timeout)
                          .orElse(candidateRuns.find(_.result == Unknown))
+                         .orElse(candidateRuns.find(!_.isIncorrect))
                          .orElse(candidateRuns.headOption) // Should always exist
                          .get
           }
@@ -584,7 +652,7 @@ object Main {
 
         val representativeSummary = constituentRuns.head._1
         val portfolioSummary = representativeSummary.copy(
-          toolName = "V. Portfolio",
+          toolName = portfolioToolName,
           notes = portfolio.name,
           ymlFileName = "virtual.yml"
           )
@@ -595,34 +663,152 @@ object Main {
     runs ++ newPortfolios.flatten
   }
 
+  private val portfolioToolName = "V. Portfolio"
+
+  // the names of the tool of a row in options: its name in the logs with and
+  // without notes, for a portfolio also its name in -portfolio
+  private def toolNames(summary : Summary) : Set[String] =
+    Set(summary.toolName, summary.fullToolName) ++
+      (if (summary.toolName == portfolioToolName) Set(summary.notes) else Nil)
+
+  // the rows by their first name in -tools, then by name
+  private def selectionOrder(summary : Summary) : (Int, String) =
+    (selectedTools.indexWhere(toolNames(summary).contains), summary.fullToolName)
+
+  /** The rows of the tools in -tools, in its order; without -tools all rows. */
+  private def selectTools(runs : Seq[(Summary, RunInfos)]) : Seq[(Summary, RunInfos)] =
+    if (selectedTools.isEmpty) runs
+    else runs.filter(row => selectedTools.exists(toolNames(row._1).contains))
+             .sortBy(row => selectionOrder(row._1))
+
+  // the runs of each tool over all groups, a benchmark named by its group and
+  // its name, so that the names in two groups are distinct
+  private def unionOfGroups(groups : Seq[Group]) : Group = {
+    val rows = for (group <- groups; (summary, runInfos) <- group.toolRuns)
+      yield (summary, runInfos.runs.map(run =>
+        run.copy(uniqueBaseName = Some(group.name + "/" + run.bmBaseName))))
+    val toolRuns = rows.groupBy(_._1.fullToolName).values.toSeq
+      .map(toolRows => (toolRows.head._1, RunInfos(toolRows.flatMap(_._2))))
+      .sortBy(row => selectionOrder(row._1))
+    Group("", toolRuns, toolRuns.flatMap(_._2.runs.map(_.bmBaseName)).toSet)
+  }
+
+  private def renamedSummary(summary : Summary) : Summary = {
+    val newName = Settings.runtimeToolNameReplacements.getOrElse(
+      summary.toolName, summary.toolName)
+    summary.copy(toolName = newName)
+  }
+
+  // renamed only after the raw names were used for parsing, merging,
+  // portfolios and the selection of tools
+  private def renamed(runs : Seq[(Summary, RunInfos)]) : Seq[(Summary, RunInfos)] =
+    runs.map { case (summary, runInfos) => (renamedSummary(summary), runInfos) }
+
+  // the printed names of the rows of the group that options name by `names`
+  private def printedNames(group : Group, names : Seq[String]) : Set[String] =
+    group.toolRuns.map(_._1)
+      .filter(summary => names.exists(toolNames(summary).contains))
+      .map(summary => renamedSummary(summary).fullToolName).toSet
+
+  // the row of the group with `name` among its names, if it is the only one;
+  // not renamed
+  private def namedRow(group : Group, name : String) : Option[(Summary, RunInfos)] =
+    group.toolRuns.filter(row => toolNames(row._1).contains(name)) match {
+      case Seq(row) => Some(row)
+      case _ => None
+    }
+
+  // the printed names of the tools of each portfolio of the group, by the
+  // printed name of the portfolio
+  private def portfolioMembers(group : Group) : Map[String, Set[String]] = {
+    val summaries = group.toolRuns.map(_._1)
+    val tools = summaries.filter(_.toolName != portfolioToolName)
+    (for (summary <- summaries if summary.toolName == portfolioToolName;
+          portfolio <- activePortfolios.find(_.name == summary.notes))
+     yield renamedSummary(summary).fullToolName ->
+       tools.filter(isConstituent(portfolio, _))
+         .map(renamedSummary(_).fullToolName).toSet).toMap
+  }
+
+  /** The .yml files of a directory, or the file itself. */
+  private def ymlFilesOf(in : java.io.File) : List[java.io.File] = {
+    val files = if (in.isDirectory) {
+      printInfo("Processing all .yml files under " + in + "...")
+      val fileList = in.listFiles()
+      if (fileList != null) fileList.toList else List.empty
+    } else {
+      List(in)
+    }
+    files.filter(_.getName.endsWith(".yml"))
+  }
+
   def main(args: Array[String]) : Unit = {
     val usage =
-      """|Usage: yml2stats [options] inFileName | inDirName
+      """|Usage: yml2stats [options] (inFileName | inDirName)...
          |
          |Processes .yml files from benchmark runs and generates summary tables.
          |
          |inFileName      : A single .yml input file to process.
          |inDirName       : A directory containing .yml files to process.
          |
+         |Several inputs are groups, e.g. categories, named by the last part of their paths.
+         |The tables over all groups contain the runs of each tool in its groups, the benchmarks
+         |prefixed by their group (GROUP/name).
+         |
          |Options:
          |  -summary      : Print simplified summary table in text format.
          |  -summary-tex  : Print simplified summary table in LaTeX format.
          |  -summary-ext  : Print extended summary table in text format (was -table5tex default without tex).
+         |                  Out-of-memory errors are in Memout, the other errors in Error.
          |  -summary-ext-tex : Print extended summary table in LaTeX format.
          |  -details      : Print detailed per-benchmark results in text format.
          |  -details-tex  : Print detailed per-benchmark results in LaTeX format.
          |  -matrix       : Print matrix of comparative results in text format.
          |  -matrixtex    : Print matrix of comparative results in LaTeX format.
+         |  -matrix-diff  : List the benchmarks each tool solved that another did not.
          |  -errors       : Print benchmarks that had errors, with error messages.
          |  -inconsistent : Print benchmarks with inconsistent results across tools.
+         |  -overview     : Print the solved benchmarks (sat/unsat) per group and tool in text format,
+         |                  with the number of benchmarks of each group and a total.
+         |  -overview-tex : Print the solved benchmarks per group and tool in LaTeX format, the best
+         |                  values of each group in bold.
+         |  -unique       : Print per group and tool the benchmarks (sat/unsat) solved by the tool and by
+         |                  no other tool in text format; a portfolio is compared with the tools that
+         |                  are not its members, and portfolios are no other tools.
+         |  -unique-tex   : Print the uniquely solved benchmarks per group and tool in LaTeX format.
+         |  -no-best:TOOL1,TOOL2,... : Leave these tools out of the best values of -overview-tex.
+         |  -midrule-after:GROUP : A \midrule after the row of GROUP in -overview-tex and -unique-tex
+         |                  (repeatable).
+         |  -compare:TOOL,OTHER : Print over all groups the solved benchmarks and memouts of TOOL and of
+         |                  OTHER and the benchmarks (sat/unsat) solved only by TOOL and only by OTHER in
+         |                  text format (repeatable, one row per pair).
+         |  -compare-tex:TOOL,OTHER : The same in LaTeX format (repeatable).
+         |  -runtimes:BASE : Print over all groups per tool other than BASE and verdict (sat, unsat) the
+         |                  benchmarks solved by both with the verdict, those solved in less and in more time
+         |                  by the tool, and the median and the geometric mean of the time ratio tool/BASE
+         |                  in text format (repeatable, one table per BASE).
+         |  -runtimes-tex:BASE : The same in LaTeX format (repeatable).
          |  -errors-as-errors : Exclude error benchmarks from comparisons (don't treat them as unknown).
          |  -cactus-pdf   : Generate a cactus plot in PDF format.
          |  -cactus-plotly: Generate a cactus plot using Plotly (DISABLED).
          |  -v            : Set verbosity level to 1 (warnings).
          |  -v:N          : Set verbosity level to N (0=quiet, 1=warnings, 2=info).
-         |  -rename-tool:FROM=TO  : Rename a tool in output (repeatable).
+         |  -rename-tool:FROM=TO  : Rename a tool in all output; -portfolio and file merging use FROM (repeatable).
          |  -rename-header:FROM=TO : Rename a column header (repeatable).
-         |  -hide-col:NAME : Hide a column by key: sat, unsat, incorrect, timeout, error, unknown, total (repeatable).
+         |  -hide-col:NAME : Hide a column by key: sat, unsat, incorrect, timeout, memout, error, unknown, total (repeatable).
+         |  -portfolio:NAME=TOOL1,TOOL2,... : Add the virtual portfolio NAME of the tools: per benchmark
+         |                  the fastest run of the tools that solved it (repeatable).
+         |  -tools:TOOL1,TOOL2,... : Only these tools and portfolios (NAME of -portfolio), in this order
+         |                  in every table; the other tools are left out before the comparisons.
+         |  -expected:FILE : Expected verdicts from FILE in place of those in the logs: per line the name of a
+         |                  benchmark as in the logs and its verdict, e.g. sat or unsat (repeatable).
+         |  -incorrect-as-unsolved : An incorrect verdict, which contradicts the expected verdict, is
+         |                  unsolved: in the column Incorrect of the extended summary, not in Sat or Unsat;
+         |                  a portfolio solves a benchmark only with a correct verdict.
+         |  -crashes-as-errors : A run that ended with a nonzero exit code (other error) or was killed before
+         |                  the wall time limit without a verdict and not for its memory is an error.
+         |  -unknown-as-timeout:N : A run with the result unknown that lasted at least N seconds is a timeout,
+         |                  e.g. for a tool that answers unknown at its own time limit.
          |
          |Default (no options): Print the summary table in text format.
          |""".stripMargin
@@ -653,6 +839,9 @@ object Main {
           case "-details" :: tail =>
             doTable6Text = true
             remainingArgs = tail
+        case "-matrix-diff" :: tail =>
+          doMatrixDiff = true
+          remainingArgs = tail
         case "-matrix" :: tail =>
           doMatrixText = true
           remainingArgs = tail
@@ -704,56 +893,151 @@ object Main {
         case opt :: tail if opt.startsWith("-hide-col:") =>
           Settings.hiddenColumns += opt.substring("-hide-col:".length).toLowerCase
           remainingArgs = tail
+        case opt :: tail if opt.startsWith("-portfolio:") =>
+          val spec = opt.substring("-portfolio:".length)
+          val eqIdx = spec.indexOf('=')
+          val tools = spec.substring(eqIdx + 1).split(",").map(_.trim)
+                          .filter(_.nonEmpty).toSet
+          if (eqIdx <= 0 || tools.isEmpty) {
+            println(s"Invalid portfolio in option: $opt\n")
+            println(usage)
+            return
+          }
+          Settings.portfoliosFromArgs +=
+            VirtualPortfolio(spec.substring(0, eqIdx), tools, Set("all"))
+          remainingArgs = tail
+        case "-overview" :: tail =>
+          doOverviewText = true
+          remainingArgs = tail
+        case "-overview-tex" :: tail =>
+          doOverviewTex = true
+          remainingArgs = tail
+        case "-unique" :: tail =>
+          doUniqueText = true
+          remainingArgs = tail
+        case "-unique-tex" :: tail =>
+          doUniqueTex = true
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-compare:") || opt.startsWith("-compare-tex:") =>
+          opt.substring(opt.indexOf(':') + 1).split(",").map(_.trim) match {
+            case Array(tool, other) if opt.startsWith("-compare:") =>
+              comparisonsText :+= ((tool, other))
+            case Array(tool, other) =>
+              comparisonsTex :+= ((tool, other))
+            case _ =>
+              println(s"Invalid pair of tools in option: $opt\n")
+              println(usage)
+              return
+          }
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-runtimes:") =>
+          runtimeBasesText :+= opt.substring("-runtimes:".length).trim
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-runtimes-tex:") =>
+          runtimeBasesTex :+= opt.substring("-runtimes-tex:".length).trim
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-no-best:") =>
+          noBestTools ++= opt.substring("-no-best:".length).split(",")
+                             .map(_.trim).filter(_.nonEmpty)
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-midrule-after:") =>
+          midruleAfterGroups += opt.substring("-midrule-after:".length)
+          remainingArgs = tail
+        case "-incorrect-as-unsolved" :: tail =>
+          incorrectAsUnsolved = true
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-unknown-as-timeout:") =>
+          try {
+            unknownAsTimeoutAfter =
+              Some(opt.substring("-unknown-as-timeout:".length).toDouble)
+          } catch {
+            case _: NumberFormatException =>
+              println(s"Invalid number of seconds in option: $opt")
+              println(usage)
+              return
+          }
+          remainingArgs = tail
+        case "-crashes-as-errors" :: tail =>
+          crashesAsErrors = true
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-expected:") =>
+          expectedVerdicts ++= Util.readExpectedVerdicts(opt.substring("-expected:".length))
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-tools:") =>
+          selectedTools = opt.substring("-tools:".length).split(",")
+                             .map(_.trim).filter(_.nonEmpty).toSeq
+          remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
           println(s"Unknown option: $opt\n")
           println(usage)
           return
         case path :: tail =>
-          if (inFileName.nonEmpty) {
-            println("Error: More than one input file/directory specified.\n")
-            println(usage)
-            return
-          }
-          inFileName = path
+          inFileNames += path
           remainingArgs = tail
       }
     }
 
-    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doErrors && !doInconsistent && !doCactusPdf && !doCactusPlotly) {
+    if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doMatrixDiff && !doErrors && !doInconsistent && !doCactusPdf && !doCactusPlotly &&
+        !doOverviewText && !doOverviewTex && !doUniqueText && !doUniqueTex &&
+        comparisonsText.isEmpty && comparisonsTex.isEmpty &&
+        runtimeBasesText.isEmpty && runtimeBasesTex.isEmpty) {
       doTable5Text = true
     }
 
-    if (inFileName.isEmpty) {
+    if (inFileNames.isEmpty) {
       println("An input filename must be provided.\n")
       println(usage)
       return
     }
 
-    val in = new java.io.File(inFileName)
-    if (!in.exists) {
-      println(inFileName + " not found!"); return
+    inFileNames.find(name => !new java.io.File(name).exists) match {
+      case Some(inFileName) =>
+        println(inFileName + " not found!"); return
+      case None =>
     }
 
-    val files = if (in.isDirectory) {
-      printInfo("Processing all .yml files under " + in + "...")
-      val fileList = in.listFiles()
-      if (fileList != null) fileList.toList else List.empty
-    } else {
-      List(in)
+    val ymlFilesOfInputs =
+      inFileNames.toList.map(name => (name, ymlFilesOf(new java.io.File(name))))
+
+    ymlFilesOfInputs.find(_._2.isEmpty) match {
+      case Some((inFileName, _)) =>
+        println("No .yml files found in " + inFileName)
+        return
+      case None =>
     }
 
-    val ymlFiles = files.filter(_.getName.endsWith(".yml"))
-
-    if (ymlFiles.isEmpty) {
-      println("No .yml files found in " + inFileName)
+    val groupNames = ymlFilesOfInputs.map(input => new java.io.File(input._1).getName)
+    groupNames.diff(groupNames.distinct).headOption match {
+      case Some(name) =>
+        println("Several inputs with the name " + name + ", the name of a group.")
+        return
+      case None =>
+    }
+    val groups = for (((_, ymlFiles), name) <- ymlFilesOfInputs.zip(groupNames))
+      yield readGroup(name, ymlFiles)
+    for (name <- selectedTools
+         if !groups.exists(_.toolRuns.exists(row => toolNames(row._1) contains name)))
+      printWarning(s"Warning: No runs found for the tool '$name'.")
+    val allGroups = if (groups.size == 1) groups.head else unionOfGroups(groups)
+    val unnamed = ((comparisonsText ++ comparisonsTex)
+      .flatMap(pair => Seq(pair._1, pair._2)) ++
+      runtimeBasesText ++ runtimeBasesTex).distinct
+      .filter(name => namedRow(allGroups, name).isEmpty)
+    if (unnamed.nonEmpty) {
+      println("No single tool with runs named " + unnamed.mkString(", ") + ".")
       return
     }
+    printOutputs(groups, allGroups)
+  }
 
+  // the runs of the tools of the yml files: the files of a tool merged,
+  // portfolios added and tools selected
+  private[yml2stats] def readGroup(name : String, ymlFiles : List[java.io.File]) : Group = {
 ////////////////////////////////////////////////////////////////////////////////
 // Read YAML files and convert into useful data structures (one file at a time
 // to avoid keeping all raw YAML data in memory simultaneously)
 
-    val unmergedToolRuns : Seq[(Summary, Seq[RunInfo])] =
+    val loadedToolRuns : Seq[(Summary, Seq[RunInfo])] =
       for (file <- ymlFiles) yield {
         val fileName = file.getName
         printInfo("Processing " + fileName + "...")
@@ -808,15 +1092,39 @@ object Main {
                }
           }
 
+        val summary = Summary(rawSummary, fileName)
         val runInfos = RunInfos(for (rawRunInfo <- rawRunInfos) yield {
-          val result = outputParser(rawRunInfo.toolOutput, rawRunInfo.bmName)
-          val expected = expectedStatusParser(rawRunInfo.expected)
-          RunInfo(rawRunInfo.bmName, expected, result,
-                  rawRunInfo.duration.dropRight(1).toDouble) // todo properly parse duration
+          val duration = rawRunInfo.duration.dropRight(1).toDouble // todo properly parse duration
+          val result =
+            outputParser(rawRunInfo.toolOutput, rawRunInfo.bmName) match {
+              case Timeout if isMemoryKill(rawRunInfo, duration, summary) =>
+                Error(Set(ErrorType.OutOfMemory),
+                      rawRunInfo.toolOutput.mkString("\n"))
+              case parsed if crashesAsErrors &&
+                             isCrash(rawRunInfo, parsed, duration, summary) =>
+                Error(Set(ErrorType.Other), rawRunInfo.toolOutput.mkString("\n"))
+              case Unknown if unknownAsTimeoutAfter.exists(duration >= _) =>
+                Timeout
+              case parsed => parsed
+            }
+          val expected = expectedVerdicts.getOrElse(
+            rawRunInfo.bmName, expectedStatusParser(rawRunInfo.expected))
+          RunInfo(rawRunInfo.bmName, expected, result, duration)
         })
         printInfo("done! " + runInfos.length + " runs found.")
-        (Summary(rawSummary, fileName), runInfos.runs)
+        (summary, runInfos.runs)
       }
+
+    // unique names from the benchmarks of all files, so that a benchmark has
+    // the same name in every file
+    val uniqueBaseNames : Map[String, String] =
+      makeUniqueBaseNames(loadedToolRuns.flatMap(_._2).groupBy(_.bmName)
+                            .values.map(_.head).toSeq)
+        .map(run => run.bmName -> run.bmBaseName).toMap
+    val unmergedToolRuns : Seq[(Summary, Seq[RunInfo])] =
+      for ((summary, runs) <- loadedToolRuns) yield
+        (summary, runs.map(run =>
+          run.copy(uniqueBaseName = Some(uniqueBaseNames(run.bmName)))))
 
     if (mergeYmlFiles && combineResults)
       printWarning("Cannot enable both mergeYmlFiles and combineResults! " +
@@ -914,7 +1222,9 @@ object Main {
       }
     }.toSeq
 
-    val toolRuns = createVirtualPortfolios(toolRunsWithoutVP.toSeq)
+    val toolRuns = selectTools(createVirtualPortfolios(toolRunsWithoutVP.toSeq))
+    if (toolRuns.isEmpty)
+      return Group(name, Nil, Set.empty)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
@@ -1027,6 +1337,17 @@ object Main {
         (summary, RunInfos(filteredRuns))
       }).toSeq
 
+    Group(name, filteredToolRuns, finalCommonBenchmarkNames)
+  }
+
+  /**
+   * Prints the outputs of the options.
+   * @param allGroups the groups, or with several groups their union
+   */
+  private def printOutputs(groups : Seq[Group], allGroups : Group) : Unit = {
+    val filteredToolRuns = renamed(allGroups.toolRuns)
+    val finalCommonBenchmarkNames = allGroups.benchmarkNames
+
     if (printCombinatorialResults) {
       println
       for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
@@ -1089,6 +1410,10 @@ object Main {
       printSep()
       printMatrixTextFormat(filteredToolRuns)
     }
+    if (doMatrixDiff) {
+      printSep()
+      printMatrixDiffFormat(filteredToolRuns)
+    }
     if (doMatrixTex) {
       printSep()
       printMatrixLatexFormat(filteredToolRuns)
@@ -1101,6 +1426,50 @@ object Main {
       printSep()
       printInconsistentFormat(filteredToolRuns, finalCommonBenchmarkNames)
     }
+
+    val renamedGroups =
+      groups.map(group => group.copy(toolRuns = renamed(group.toolRuns)))
+    val tools = inTableOrder(filteredToolRuns).map(_._1)
+    val noBest = printedNames(allGroups, noBestTools)
+    val members = portfolioMembers(allGroups)
+    if (doOverviewText) {
+      printSep()
+      GroupTables.printOverview(renamedGroups, tools, noBest, latex = false)
+    }
+    if (doOverviewTex) {
+      printSep()
+      GroupTables.printOverview(renamedGroups, tools, noBest, latex = true)
+    }
+    if (doUniqueText) {
+      printSep()
+      GroupTables.printUnique(renamedGroups, tools, members, latex = false)
+    }
+    if (doUniqueTex) {
+      printSep()
+      GroupTables.printUnique(renamedGroups, tools, members, latex = true)
+    }
+    def renamedRow(name : String) = {
+      val (summary, runs) = namedRow(allGroups, name).get
+      (renamedSummary(summary), runs)
+    }
+    def namedRows(pairs : Seq[(String, String)]) =
+      for ((tool, other) <- pairs) yield (renamedRow(tool), renamedRow(other))
+    if (comparisonsText.nonEmpty) {
+      printSep()
+      GroupTables.printComparison(namedRows(comparisonsText), latex = false)
+    }
+    if (comparisonsTex.nonEmpty) {
+      printSep()
+      GroupTables.printComparison(namedRows(comparisonsTex), latex = true)
+    }
+    def printRuntimes(base : String, latex : Boolean) = {
+      printSep()
+      val baseRow = renamedRow(base)
+      GroupTables.printRuntimes(baseRow, inTableOrder(filteredToolRuns)
+        .filter(_._1.fullToolName != baseRow._1.fullToolName), latex)
+    }
+    runtimeBasesText.foreach(printRuntimes(_, latex = false))
+    runtimeBasesTex.foreach(printRuntimes(_, latex = true))
 
     for ((summary, runs) <- filteredToolRuns) {
       if (runs.incorrectRuns.nonEmpty) {
@@ -1130,8 +1499,8 @@ object Main {
       val inconsistentRuns = new ArrayBuffer[String]
       for (bmName <- finalCommonBenchmarkNames) {
         val runPerTool =
-          filteredToolRuns.map{case (summary, toolRuns) =>
-            (summary.fullToolName ,toolRuns.getRun(bmName).get)}
+          filteredToolRuns.flatMap{case (summary, toolRuns) =>
+            toolRuns.getRun(bmName).map(run => (summary.fullToolName, run))}
         for (Seq((tool1, run1), (tool2, run2)) <- runPerTool.combinations(2)) {
           if(!runsAreConsistent(run1, run2)) {
             assert(run1.expected == run2.expected)
