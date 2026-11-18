@@ -14,9 +14,12 @@ import scala.collection.mutable.ArrayBuffer
 //import plotly.layout._
 //import plotly.kaleido.Kaleido._
 
-import org.jfree.chart.axis.LogarithmicAxis
+import org.jfree.chart.annotations.XYLineAnnotation
+import org.jfree.chart.axis.{LogAxis, NumberAxis, ValueAxis}
+import org.jfree.chart.plot.ValueMarker
 import org.jfree.chart.block.BlockBorder
 import org.jfree.chart.plot.PlotOrientation
+import org.jfree.chart.plot.SeriesRenderingOrder
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer
 import org.jfree.chart.ui.RectangleEdge
 import org.jfree.chart.util.ExportUtils
@@ -28,6 +31,7 @@ import java.awt.geom.Rectangle2D
 import org.jfree.data.Range
 
 import yml2stats.Settings._
+import yml2stats.Main.printInfo
 
 import java.awt.geom.{Ellipse2D, Rectangle2D}
 import java.awt.{BasicStroke, Color, Polygon, Shape, Font => AwtFont}
@@ -333,9 +337,16 @@ object Plotting {
     getRuns: RunInfos => Seq[RunInfo]
   ): XYSeriesCollection = {
     val dataset = new XYSeriesCollection()
-    val sortedToolRuns = toolRuns.sortBy { case (summary, _) =>
-      (getEncodingSortKey(summary.notes), getCleanEncodingName(summary.notes), summary.toolName)
-    }
+    val sortedToolRuns =
+      if (selectedTools.nonEmpty) toolRuns
+      else toolRuns.sortBy { case (summary, _) =>
+        (getEncodingSortKey(summary.notes), getCleanEncodingName(summary.notes), summary.toolName)
+      }
+
+    val floor =
+      if (useLogarithmicYCactus)
+        logAxisFloor(toolRuns.flatMap(row => getRuns(row._2)).map(_.duration))
+      else 0.0
 
     for ((summary, runInfos) <- sortedToolRuns) {
       val seriesName = formatNameForPlot(summary)
@@ -343,7 +354,8 @@ object Plotting {
       val relevantRuns = getRuns(runInfos).sortBy(_.duration)
 
       for ((run, index) <- relevantRuns.zipWithIndex) {
-        series.add(index + 1, run.duration)
+        series.add(new BenchmarkItem(index + 1, math.max(run.duration, floor),
+                                     run.bmName))
       }
       dataset.addSeries(series)
     }
@@ -358,7 +370,7 @@ object Plotting {
     xAxisLabel: String,
     options: CactusPlotDisplayOptions // <-- New parameter for display options
   ): Unit = {
-    println(s"Generating time-based cactus plot for '$fileNameSuffix' benchmarks...")
+    printInfo(s"Generating time-based cactus plot for '$fileNameSuffix' benchmarks...")
 
     val dataset = createCactusDataset(toolRuns, getRuns)
 
@@ -385,14 +397,11 @@ object Plotting {
     }
 
     try {
-      val plotFileName = s"${Settings.cactusPlotByTimeFile}-$fileNameSuffix.pdf"
-      val pdfFile = new File(s"$plotSaveDirectory/$plotFileName")
-      val outputDir = new File(plotSaveDirectory)
-      if (!outputDir.exists()) outputDir.mkdirs()
-      println(s"Attempting to save plot to: ${pdfFile.getAbsolutePath}")
+      val plotName = s"${Settings.cactusPlotByTimeFile}-$fileNameSuffix"
+      val plotFile = new File(s"$plotSaveDirectory/$plotName")
+      printInfo(s"Attempting to save plot to: ${plotFile.getAbsolutePath}")
 
-      ExportUtils.writeAsPDF(chart, options.width, options.height, pdfFile)
-      println(s"Plot '$plotFileName' saved successfully!")
+      writePlot(chart, options.width, options.height, plotFile.getPath)
 
     } catch {
       case e: Exception =>
@@ -430,6 +439,212 @@ object Plotting {
       "Number of solved U benchmarks",
       Settings.cactusPlotUnsafeOptions
     )
+  }
+
+  /**
+   * Writes the cactus plots `NAME-sat.pdf` and `NAME-unsat.pdf`, on a
+   * logarithmic axis.
+   */
+  def plotCactusPerVerdict(toolRuns : Seq[(Summary, RunInfos)],
+                           name : String) : Unit =
+    for ((verdict, solvedRuns) <- RunInfos.verdicts) {
+      val chart = ChartFactory.createXYLineChart(
+        "", s"$verdict benchmarks solved", "Duration (s)",
+        createCactusDataset(toolRuns, solvedRuns),
+        PlotOrientation.VERTICAL, true, false, false)
+      customizeChartAppearance(chart)
+      chart.setTitle(null.asInstanceOf[String])
+      chart.getLegend.setPosition(RectangleEdge.TOP)
+      writePlot(chart, 400, 320, s"$name-$verdict")
+    }
+
+  // the benchmarks with different verdicts of the two tools
+  private[yml2stats] val Inconsistent = "inconsistent"
+
+  /**
+   * The points of the scatter plot of two tools by verdict: the benchmarks
+   * run by both and solved by at least one, an unsolved one at the time
+   * limit.
+   */
+  private[yml2stats] def scatterPoints(runs : RunInfos, otherRuns : RunInfos,
+                                       limit : Double)
+      : Map[String, Seq[(String, Double, Double)]] = {
+    def solved(r : RunInfos) : Map[String, (String, Double)] =
+      (for ((verdict, solvedRuns) <- RunInfos.verdicts; run <- solvedRuns(r))
+       yield run.bmBaseName -> ((verdict, run.duration))).toMap
+    val (toolSolved, otherSolved) = (solved(runs), solved(otherRuns))
+    val benchmarks = runs.runs.map(r => r.bmBaseName -> r.bmName).toMap
+    val runByBoth =
+      benchmarks.keySet intersect otherRuns.runs.map(_.bmBaseName).toSet
+    val points =
+      for (name <- (toolSolved.keySet ++ otherSolved.keySet).toSeq.sorted
+           if runByBoth(name)) yield {
+        val (byTool, byOther) = (toolSolved.get(name), otherSolved.get(name))
+        val verdict = (byTool ++ byOther).map(_._1).toSeq.distinct match {
+          case Seq(v) => v
+          case _ => Inconsistent
+        }
+        (verdict, (benchmarks(name), byTool.map(_._2).getOrElse(limit),
+                   byOther.map(_._2).getOrElse(limit)))
+      }
+    points.groupBy(_._1).map { case (verdict, ps) => verdict -> ps.map(_._2) }
+  }
+
+  /**
+   * Writes the scatter plot `NAME.pdf` of the durations of `tool` (x) and
+   * `other` (y), with the diagonal and dashed lines at the time limit.
+   */
+  def plotScatter(tool : (Summary, RunInfos), other : (Summary, RunInfos),
+                  name : String) : Unit = {
+    val limit = math.max(tool._1.wallTimeLimit, other._1.wallTimeLimit)
+    val points = scatterPoints(tool._2, other._2, limit)
+    val values = points.values.flatten.flatMap { case (_, x, y) => Seq(x, y) }
+    val low = logAxisFloor(values ++ Seq(limit))
+    val dataset = new XYSeriesCollection()
+    for (verdict <- RunInfos.verdicts.map(_._1) ++
+                    Seq(Inconsistent).filter(points.contains)) {
+      val verdictPoints = points.getOrElse(verdict, Nil)
+      val series = new XYSeries(s"$verdict (${verdictPoints.length})")
+      for ((benchmark, x, y) <- verdictPoints)
+        series.add(new BenchmarkItem(math.max(x, low), math.max(y, low), benchmark))
+      dataset.addSeries(series)
+    }
+    val chart = ChartFactory.createScatterPlot(
+      "", s"${formatNameForPlot(tool._1)} duration (s)",
+      s"${formatNameForPlot(other._1)} duration (s)", dataset)
+    customizeChartAppearance(chart)
+    chart.setTitle(null.asInstanceOf[String])
+    chart.getLegend.setPosition(RectangleEdge.TOP)
+
+    val plot = chart.getXYPlot
+    val (domainAxis, rangeAxis) =
+      (logAxis(plot.getDomainAxis), logAxis(plot.getRangeAxis))
+    for (axis <- Seq(domainAxis, rangeAxis)) axis.setRange(low, limit * 1.5)
+    plot.setDomainAxis(domainAxis)
+    plot.setRangeAxis(rangeAxis)
+    val lineColor = new Color(120, 120, 120)
+    plot.addAnnotation(new XYLineAnnotation(low, low, limit, limit,
+                                            new BasicStroke(0.8f), lineColor))
+    val dashed = new BasicStroke(0.8f, BasicStroke.CAP_BUTT,
+                                 BasicStroke.JOIN_MITER, 10.0f,
+                                 Array(4.0f, 3.0f), 0.0f)
+    plot.addDomainMarker(new ValueMarker(limit, lineColor, dashed))
+    plot.addRangeMarker(new ValueMarker(limit, lineColor, dashed))
+
+    val renderer = new XYLineAndShapeRenderer(false, true) {
+      // opaque in the legend, to be readable
+      override def getLegendItem(datasetIndex : Int, series : Int) = {
+        val item = super.getLegendItem(datasetIndex, series)
+        val color = lookupSeriesPaint(series).asInstanceOf[Color]
+        item.setFillPaint(new Color(color.getRed, color.getGreen, color.getBlue))
+        item
+      }
+    }
+    // no outlines, as their thin lines make dense regions pale; unsat drawn
+    // over sat, inconsistent over both
+    val (width, height) = (320, 340)
+    val size = scatterMarkerSize.getOrElse(2.5) * documentScale(width)
+    val alpha = (scatterMarkerOpacity.getOrElse(0.8) * 255).round.toInt
+    val styles = Seq((circle _, new Color(0x2a, 0x78, 0xd6, alpha)),
+                     (triangle _, new Color(0xeb, 0x68, 0x34, alpha)),
+                     (diamond _, new Color(0x1b, 0xaf, 0x7a, alpha)))
+    renderer.setDrawOutlines(false)
+    for (((shape, color), i) <- styles.zipWithIndex) {
+      renderer.setSeriesShape(i, shape(size))
+      renderer.setLegendShape(i, shape(4 * documentScale(width)))
+      renderer.setSeriesPaint(i, color)
+    }
+    plot.setRenderer(renderer)
+    plot.setSeriesRenderingOrder(SeriesRenderingOrder.FORWARD)
+    writePlot(chart, width, height, name)
+  }
+
+  // scatter markers, `size` points wide
+  private def circle(size : Double) : Shape =
+    new Ellipse2D.Double(-size / 2, -size / 2, size, size)
+
+  private def triangle(size : Double) : Shape = {
+    val half = size / 2
+    val result = new GeneralPath()
+    result.moveTo(0, -half)
+    result.lineTo(half, half)
+    result.lineTo(-half, half)
+    result.closePath()
+    result
+  }
+
+  // sides of `size`, larger than the circle, so that the rare inconsistent
+  // points stand out
+  private def diamond(size : Double) : Shape = {
+    val half = size / math.sqrt(2)
+    val result = new GeneralPath()
+    result.moveTo(0, -half)
+    result.lineTo(half, 0)
+    result.lineTo(0, half)
+    result.lineTo(-half, 0)
+    result.closePath()
+    result
+  }
+
+  // the power of ten below the shortest positive duration, where a duration
+  // of 0 s, as in logs in whole seconds, is drawn on a log axis
+  private def logAxisFloor(durations : Iterable[Double]) : Double = {
+    val positive = durations.filter(_ > 0)
+    if (positive.isEmpty) 1.0
+    else math.pow(10, math.ceil(math.log10(positive.min)) - 1)
+  }
+
+  // ticks at integer powers of ten
+  private def logAxis(axis : ValueAxis) : LogAxis = {
+    val result = new LogAxis(axis.getLabel)
+    result.setLabelFont(axis.getLabelFont)
+    result.setTickLabelFont(axis.getTickLabelFont)
+    result.setStandardTickUnits(NumberAxis.createIntegerTickUnits())
+    result.setMinorTickMarksVisible(true)
+    result
+  }
+
+  // NAME.pdf and, with -plot-html, NAME.html
+  private def writePlot(chart : JFreeChart, width : Int, defaultHeight : Int,
+                        name : String) : Unit = {
+    val height = plotAspect.map(a => (width * a).round.toInt)
+                           .getOrElse(defaultHeight)
+    setDocumentFonts(chart, width)
+    val pdf = new File(s"$name.pdf")
+    Option(pdf.getAbsoluteFile.getParentFile).foreach(_.mkdirs())
+    ExportUtils.writeAsPDF(chart, width, height, pdf)
+    printInfo(s"Plot saved to $name.pdf")
+    if (plotHtml) {
+      HtmlPlots.write(chart, width, height, s"$name.html")
+      printInfo(s"Plot saved to $name.html")
+    }
+  }
+
+  // points of a plot `width` points wide per point of the document, where
+  // the plot is plotWidth points wide
+  private def documentScale(width : Int) : Double =
+    width / plotWidth.getOrElse(width.toDouble)
+
+  // the text at plotFontSize in the document, else at its size
+  private def setDocumentFonts(chart : JFreeChart, width : Int) : Unit = {
+    val scale = documentScale(width)
+    def sized(font : AwtFont) = font.deriveFont(
+      (plotFontSize.getOrElse(font.getSize2D.toDouble) * scale).toFloat)
+    val plot = chart.getXYPlot
+    for (axis <- Seq(plot.getDomainAxis, plot.getRangeAxis)) {
+      axis.setLabelFont(sized(axis.getLabelFont))
+      axis.setTickLabelFont(sized(axis.getTickLabelFont))
+    }
+    for (legend <- Option(chart.getLegend)) {
+      val font = legend.getItemFont
+      legend.setItemFont(sized(font))
+      // padding in proportion to the text
+      val factor = sized(font).getSize2D / font.getSize2D
+      val padding = legend.getItemLabelPadding
+      legend.setItemLabelPadding(new RectangleInsets(
+        padding.getTop * factor, padding.getLeft * factor,
+        padding.getBottom * factor, padding.getRight * factor))
+    }
   }
 
   private def generateStyles(
@@ -474,6 +689,9 @@ object Plotting {
    */
   private def customizeChartAppearance(chart: JFreeChart): Unit = {
     val plot = chart.getXYPlot
+    // before the labels are copied to log axes
+    for (axis <- Seq(plot.getDomainAxis, plot.getRangeAxis))
+      axis.setLabel(axisLabelRenames.getOrElse(axis.getLabel, axis.getLabel))
     plot.setBackgroundPaint(Color.WHITE)
     val gridColor = new Color(200, 200, 200)
     plot.setDomainGridlinePaint(gridColor)
@@ -490,13 +708,8 @@ object Plotting {
     plot.getDomainAxis.setTickLabelFont(tickLabelFont)
     plot.getRangeAxis.setTickLabelFont(tickLabelFont)
 
-    if (useLogarithmicYCactus) {
-      val logAxis = new LogarithmicAxis(plot.getRangeAxis.getLabel)
-      logAxis.setLabelFont(axisLabelFont)
-      logAxis.setTickLabelFont(tickLabelFont)
-      logAxis.setAllowNegativesFlag(true)
-      plot.setRangeAxis(logAxis)
-    }
+    if (useLogarithmicYCactus)
+      plot.setRangeAxis(logAxis(plot.getRangeAxis))
 
     val legend: LegendTitle = chart.getLegend()
     if (legend != null) {

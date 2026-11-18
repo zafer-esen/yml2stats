@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>@TITLE@</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  /* resized by dragging its lower right corner */
+  #plot { resize: both; overflow: hidden; border: 1px solid #ddd;
+          width: @WIDTH@px; height: @HEIGHT@px; }
+  #size { color: #666; font-size: 12px; margin-top: 4px; }
+</style>
+<script>@PLOTLY@</script>
+</head>
+<body>
+<div id="plot"></div>
+<div id="size"></div>
+<script>
+const figure = @FIGURE@;
+const plot = document.getElementById("plot");
+const size = document.getElementById("size");
+Plotly.newPlot(plot, figure.data, figure.layout, figure.config);
+new ResizeObserver(() => {
+  Plotly.Plots.resize(plot);
+  const [w, h] = [plot.clientWidth, plot.clientHeight];
+  size.textContent =
+    `${w} × ${h} px, height / width ${(h / w).toFixed(2)}`;
+}).observe(plot);
+</script>
+</body>
+</html>

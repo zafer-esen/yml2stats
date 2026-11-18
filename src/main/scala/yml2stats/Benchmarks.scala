@@ -54,7 +54,8 @@ object Benchmarks {
                      expected   : Result,
                      result     : Result,
                      duration   : Double,
-                     uniqueBaseName : Option[String] = None) {
+                     uniqueBaseName : Option[String] = None,
+                     peakMemoryKB : Option[Long] = None) {
     //name without ext where bmName = dir/bmBaseName.ext
     val bmBaseName : String = {
       if (uniqueBaseName.isDefined) {
@@ -79,6 +80,10 @@ object Benchmarks {
   }
 
   object RunInfos {
+    // the runs solved correctly with each verdict
+    val verdicts : Seq[(String, RunInfos => Seq[RunInfo])] =
+      Seq(("sat", _.correctSatRuns), ("unsat", _.correctUnsatRuns))
+
     def apply(runs : Seq[RunInfo]) : RunInfos = {
       val sortedRuns = runs.sortBy(_.bmBaseName)
       new RunInfos(

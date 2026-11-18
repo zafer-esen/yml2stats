@@ -112,6 +112,7 @@ object Z3OutputParser extends ToolOutputParser {
     var _isError       = false
     var _isWallTimeout = false
     var _isKilled      = false
+    var _isNonzeroExit = false
 
     for (line <- outputLines) {
       line match {
@@ -121,8 +122,7 @@ object Z3OutputParser extends ToolOutputParser {
         // ignore this line
 //          println(bmName + "; " + outputLines)
         case _ if (line contains "other error") =>
-        // ignore this line
-//          println(bmName + "; " + outputLines)
+          _isNonzeroExit = true
         case _ if (line contains "error") =>
           _isError = true;
         case _ if (line contains "unsat") =>
@@ -152,8 +152,10 @@ object Z3OutputParser extends ToolOutputParser {
       }
     }
 
+    // a nonzero exit code without a result is a crash
+    val isCrash = _isNonzeroExit && !(_isSat || _isUnsat || _isUnknown)
     val result: Result =
-      if (_isError || _isKilled && !considerKilledAsTimeout) {
+      if (_isError || isCrash || _isKilled && !considerKilledAsTimeout) {
         val errorMsg   = outputLines.mkString("\n")
         val errorTypes = new MHashSet[ErrorType.Value]
         for (line <- outputLines) {

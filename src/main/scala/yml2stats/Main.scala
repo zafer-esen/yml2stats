@@ -14,13 +14,19 @@ import scala.collection.mutable.ArrayBuffer
 
 object Main {
 
+  // on stderr, so that stdout contains only the results
   def printWarning(s : String) = {
     if(verbosityLevel >= 1)
-      println(s)
+      Console.err.println(s)
   }
   def printInfo(s : String) = {
     if(verbosityLevel >= 2)
-      println(s)
+      Console.err.println(s)
+  }
+
+  private def exitWithError(message : String) : Nothing = {
+    Console.err.println(message)
+    sys.exit(1)
   }
 
   private def makeUniqueBaseNames(runs: Seq[RunInfo]): Seq[RunInfo] = {
@@ -84,18 +90,35 @@ object Main {
     Settings.latexToolNameReplacements.getOrElse(toolName, toolName.replace("_", "\\_"))
   }
 
-  private def renameHeader(header: String): String = {
-    Settings.headerRenames.getOrElse(header, header)
+  // -rename-col before -rename-header
+  private def renameHeader(key: String, header: String): String = {
+    Settings.columnRenames.getOrElse(key.toLowerCase,
+      Settings.headerRenames.getOrElse(header, header))
   }
 
   private def isColumnHidden(colKey: String): Boolean = {
     Settings.hiddenColumns.contains(colKey.toLowerCase)
   }
 
-  private[yml2stats] case class Col(key: String, header: String, value: String)
+  // columns not in -col-order after those in it
+  private def columnPosition(colKey: String): Int =
+    Settings.columnOrder.indexOf(colKey.toLowerCase) match {
+      case -1 => Settings.columnOrder.length
+      case i => i
+    }
+
+  // a header over adjacent columns in LaTeX
+  private[yml2stats] case class ColGroup(key: String, header: String)
+
+  /** A cell of a table with the key, header and group of its column. */
+  private[yml2stats] case class Col(key: String, header: String, value: String,
+                                    group: Option[ColGroup] = None)
 
   private[yml2stats] def filterCols(cols: Seq[Col]): Seq[Col] = {
-    cols.filterNot(c => isColumnHidden(c.key)).map(c => c.copy(header = renameHeader(c.header)))
+    cols.filterNot(c => isColumnHidden(c.key)).sortBy(c => columnPosition(c.key))
+      .map(c => c.copy(header = renameHeader(c.key, c.header),
+                       group = c.group.map(g =>
+                         g.copy(header = renameHeader(g.key, g.header)))))
   }
 
   private def sanitizeEncodingForLatex(encoding: String): String = {
@@ -126,6 +149,34 @@ object Main {
     run.toolOutput.exists(_.startsWith("other error")) && !parsed.isInstanceOf[Error] ||
     parsed == Timeout && run.toolOutput.contains("killed") &&
     duration < summary.wallTimeLimit
+
+  /**
+   * The caption of a summary with the columns `cols`.
+   * @param simple whether timeouts, memouts and errors are in Unknown
+   * @param withCorrect whether Sat and Unsat contain the number of correct
+   *                    verdicts in parentheses
+   */
+  private def statusCaption(cols : Seq[Col], simple : Boolean,
+                            withCorrect : Boolean) : String = {
+    def header(key : String) = cols.find(_.key == key).map(_.header)
+    val verdictHeaders = Seq(header("sat"), header("unsat")).flatten
+    val verdicts = verdictHeaders.mkString(" and ")
+    def verb(singular : String, plural : String) =
+      if (verdictHeaders.size == 1) singular else plural
+    val countedVerdicts =
+      if (verdicts.isEmpty) None
+      else if (simple || incorrectAsUnsolved && header("incorrect").nonEmpty)
+        Some(s"$verdicts ${verb("counts", "count")} only the verdicts that do not " +
+             "contradict the expected verdict.")
+      else if (withCorrect)
+        Some(s"$verdicts ${verb("contains", "contain")} the number of correct verdicts " +
+             "in parentheses.")
+      else None
+    val unknown =
+      if (simple) header("unknown").map(h => s"$h includes timeouts, memouts and errors.")
+      else None
+    Captions("Results per tool", (countedVerdicts ++ unknown).toSeq : _*)
+  }
 
   private def printTable5TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     val sortedRuns = inTableOrder(runs)
@@ -167,6 +218,7 @@ object Main {
     rows.foreach { row =>
       println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
     }
+    Captions.printText(statusCaption(data.head, simple = false, withCorrect = hasIncorrect))
   }
 
   private def printTable6TextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
@@ -210,10 +262,11 @@ object Main {
     summaries.zipWithIndex.foreach { case (summary, i) =>
       println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
     }
+    Captions.printText(Captions("Results per benchmark",
+      "S is the verdict sat, U the verdict unsat, E an error and ? a timeout or no verdict."))
   }
 
   private def printTable5LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = inTableOrder(runs)
 
     val hasIncorrect =
@@ -244,30 +297,18 @@ object Main {
     val numCols = header.length
 
     val headerRow = header.mkString(" & ") + " \\\\ \\midrule"
-    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\").mkString("\n")
+    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\")
     val colSpec = "l" + "r" * (numCols - 1)
 
-    val latexTableString =
-      s"""\\begin{table}[h]
-         |  \\centering
-         |  \\caption{Combined Results Summary}
-         |  \\label{tbl:combined-results-summary}
-         |  \\begin{tabular}{$colSpec}
-         |    \\toprule
-         |    $headerRow
-         |    $dataRows \\\\
-         |    \\bottomrule
-         |  \\end{tabular}
-         |\\end{table}
-         |""".stripMargin
-    println(latexTableString)
+    LatexTables.printTable(colSpec, headerRow +: dataRows,
+                           statusCaption(data.head, simple = false,
+                                         withCorrect = hasIncorrect),
+                           "tbl:combined-results-summary")
   }
 
   private def printTable6LatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("% For this table, please include the following packages in your " +
-            "LaTeX preamble:\n\\usepackage{rotating}" +
-            "\n\\usepackage{booktabs}\n\\usepackage{longtable}" +
-            "\n\\usepackage{xcolor}\n")
+    LatexTables.printPackages(Seq("rotating", "booktabs", "longtable", "xcolor"))
+    println()
     val orderedRuns = inTableOrder(runs)
     val summaries = orderedRuns.map(_._1)
     val results = orderedRuns.map(_._2)
@@ -315,7 +356,7 @@ object Main {
 
     val longtableString =
       s"""\\begin{longtable}{l${"c" * numTools}}
-         |\\caption{Per benchmark results}\\label{tbl:per-benchmark-results}\\\\
+         |\\caption{${Captions("Results per benchmark", "S is the verdict sat, U the verdict unsat, E an error and ? a timeout or no verdict.", "A correct verdict is in bold green, one that contradicts the expected verdict underlined in red.")}}\\label{tbl:per-benchmark-results}\\\\
          |$headerRow
          |\\endfirsthead
          |$headerRow
@@ -364,10 +405,10 @@ object Main {
     rows.foreach { row =>
       println(row.zip(colWidths).map { case (cell, w) => pad(cell, w) }.mkString(" | "))
     }
+    Captions.printText(statusCaption(data.head, simple = true, withCorrect = false))
   }
 
   private def printTable5SimpleLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("% For this table, please include \\usepackage{booktabs} in your LaTeX preamble.")
     val sortedRuns = inTableOrder(runs)
 
     val hasIncorrect = runs.exists { case (_, r) => r.incorrectRuns.nonEmpty }
@@ -394,24 +435,18 @@ object Main {
     val numCols = header.length
 
     val headerRow = header.mkString(" & ") + " \\\\ \\midrule"
-    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\").mkString("\n")
+    val dataRows = data.map(_.map(_.value).mkString(" & ") + " \\\\")
     val colSpec = "l" + "r" * (numCols - 1)
 
-    val latexTableString =
-      s"""\\begin{table}[h]
-         |  \\centering
-         |  \\caption{Simplified Combined Results Summary}
-         |  \\label{tbl:combined-results-summary-simple}
-         |  \\begin{tabular}{$colSpec}
-         |    \\toprule
-         |    $headerRow
-         |    $dataRows \\\\
-         |    \\bottomrule
-         |  \\end{tabular}
-         |\\end{table}
-         |""".stripMargin
-    println(latexTableString)
+    LatexTables.printTable(colSpec, headerRow +: dataRows,
+                           statusCaption(data.head, simple = true,
+                                         withCorrect = false),
+                           "tbl:combined-results-summary-simple")
   }
+
+  private val MatrixNote =
+    "A cell is the number of benchmarks solved as sat / unsat by the tool of the row " +
+    "and not by the tool of the column."
 
   private def printMatrixTextFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
     val sortedRuns = inTableOrder(runs)
@@ -456,6 +491,7 @@ object Main {
     summaries.zipWithIndex.foreach { case (summary, i) =>
       println(f"(${(i + 1)}%2d): ${summary.fullToolName}")
     }
+    Captions.printText(Captions("Comparison matrix", MatrixNote))
   }
 
   // per ordered pair of tools, the benchmarks solved by the first and not by
@@ -493,15 +529,13 @@ object Main {
   }
 
   private def printMatrixLatexFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
-    println("% For this table, please include \\usepackage{booktabs} and " +
-            "\\usepackage{rotating} in your LaTeX preamble.")
     val sortedRuns = inTableOrder(runs)
     val summaries = sortedRuns.map(_._1)
     val numTools = summaries.size
 
     val headerItems = summaries.map { s =>
       val toolLabel = s"${sanitizeToolNameForLatex(s.toolName)}"
-      s"\\rotatebox{90}{$toolLabel}"
+      if (matrixUpright) toolLabel else s"\\rotatebox{90}{$toolLabel}"
     }
     val headerRow = " & " + headerItems.mkString(" & ") + " \\\\ \\midrule"
 
@@ -516,22 +550,12 @@ object Main {
         }
       }.mkString(" & ")
       s"$rowHeader & $rowData \\\\"
-    }.mkString("\n")
+    }
 
-    val latexTableString =
-      s"""\\begin{table}[h]
-         |  \\centering
-         |  \\caption{Comparison Matrix (Row tool solved benchmarks that Column tool could not, S/U)}
-         |  \\label{tbl:comparison-matrix}
-         |  \\begin{tabular}{l|${"c" * numTools}}
-         |    \\toprule
-         |    $headerRow
-         |    $dataRows \\\\
-         |    \\bottomrule
-         |  \\end{tabular}
-         |\\end{table}
-         |""".stripMargin
-    println(latexTableString)
+    LatexTables.printTable(
+      (if (matrixUpright) "l" else "l|") + "c" * numTools, headerRow +: dataRows,
+      Captions("Comparison matrix", MatrixNote),
+      "tbl:comparison-matrix", if (matrixUpright) Nil else Seq("rotating"))
   }
 
   private def printErrorsFormat(runs: Seq[(Summary, RunInfos)]): Unit = {
@@ -779,23 +803,60 @@ object Main {
          |  -no-best:TOOL1,TOOL2,... : Leave these tools out of the best values of -overview-tex.
          |  -midrule-after:GROUP : A \midrule after the row of GROUP in -overview-tex and -unique-tex
          |                  (repeatable).
+         |  -tex-tabular  : Print the LaTeX tables in a float as a tabular only, without the table float
+         |                  with its caption and label, e.g. for a float of a document.
+         |  -matrix-upright : Column headers of -matrixtex upright, without the vertical rule.
          |  -compare:TOOL,OTHER : Print over all groups the solved benchmarks and memouts of TOOL and of
          |                  OTHER and the benchmarks (sat/unsat) solved only by TOOL and only by OTHER in
          |                  text format (repeatable, one row per pair).
-         |  -compare-tex:TOOL,OTHER : The same in LaTeX format (repeatable).
-         |  -runtimes:BASE : Print over all groups per tool other than BASE and verdict (sat, unsat) the
-         |                  benchmarks solved by both with the verdict, those solved in less and in more time
-         |                  by the tool, and the median and the geometric mean of the time ratio tool/BASE
-         |                  in text format (repeatable, one table per BASE).
-         |  -runtimes-tex:BASE : The same in LaTeX format (repeatable).
+         |  -compare-tex:TOOL,OTHER : The same in LaTeX format, with a row of column groups (repeatable).
+         |  -runtimes:BASE[=TOOL1,TOOL2,...] : Print over all groups per tool of the list, without a list
+         |                  per tool other than BASE, and verdict (sat, unsat) the benchmarks solved by both
+         |                  with the verdict, those solved in less and in more time by the tool, and the
+         |                  median and the geometric mean of the time ratio tool/BASE in text format
+         |                  (repeatable, all bases in one table with the column Base).
+         |  -runtimes-tex:BASE[=TOOL1,TOOL2,...] : The same in LaTeX format, with a row of column groups
+         |                  and a \midrule between the bases (repeatable).
+         |  -wall-times    : Print over all groups per tool the wall times of the solved benchmarks: their
+         |                  number, median, 90th and 99th percentile and maximum, and the number solved
+         |                  after 90% of the wall time limit, in text format.
+         |  -wall-times-tex : The same in LaTeX format, with a row of column groups.
+         |  -peak-memory   : Print over all groups per tool the median and the 90th percentile of the peak
+         |                  memory (MB) of the solved benchmarks and of all runs in text format; runs
+         |                  without a peak memory in their log are left out.
+         |  -peak-memory-tex : The same in LaTeX format, with a row of column groups.
          |  -errors-as-errors : Exclude error benchmarks from comparisons (don't treat them as unknown).
          |  -cactus-pdf   : Generate a cactus plot in PDF format.
          |  -cactus-plotly: Generate a cactus plot using Plotly (DISABLED).
+         |  -cactus-verdict-pdf:NAME : Write the cactus plots NAME-sat.pdf and NAME-unsat.pdf over all groups:
+         |                  per tool the durations of the benchmarks solved with the verdict in increasing
+         |                  order, on a logarithmic axis (repeatable).
+         |  -scatter-pdf:NAME=TOOL,OTHER : Write the scatter plot NAME.pdf over all groups of the durations
+         |                  of TOOL (x) and OTHER (y) on the benchmarks solved by at least one of them, by
+         |                  verdict or inconsistent, on logarithmic axes; an unsolved benchmark is at
+         |                  the larger wall time limit of the two (repeatable).
+         |  -rename-label:FROM=TO : Rename an axis label of the plots, e.g. "Duration (s)" (repeatable).
+         |  -plot-width:PT : The width of the plots in the document, in points; their text is
+         |                  scaled to its size in the document.
+         |  -plot-font-size:PT : The size of all text of the plots, in points (in the document
+         |                  with -plot-width).
+         |  -plot-aspect:R : The height of the plots relative to their width.
+         |  -scatter-marker-size:PT : The size of the markers of the scatter plots, in points
+         |                  (in the document with -plot-width).
+         |  -scatter-marker-opacity:F : The opacity of the markers of the scatter plots, from 0
+         |                  to 1.
+         |  -plot-html    : Also write an interactive version NAME.html of every plot NAME.pdf, with
+         |                  plotly.js in the file.
          |  -v            : Set verbosity level to 1 (warnings).
-         |  -v:N          : Set verbosity level to N (0=quiet, 1=warnings, 2=info).
-         |  -rename-tool:FROM=TO  : Rename a tool in all output; -portfolio and file merging use FROM (repeatable).
+         |  -v:N          : Set verbosity level to N (0=quiet, 1=warnings, 2=info);
+         |                  the messages are printed on stderr.
+         |  -rename-tool:FROM=TO  : Rename a tool in all output; file merging and the options naming tools
+         |                  (-tools, -portfolio, -no-best, ...) use FROM (repeatable).
          |  -rename-header:FROM=TO : Rename a column header (repeatable).
+         |  -rename-col:KEY=TO : Rename the header of the columns with the key, before -rename-header
+         |                  (repeatable).
          |  -hide-col:NAME : Hide a column by key: sat, unsat, incorrect, timeout, memout, error, unknown, total (repeatable).
+         |  -col-order:KEY1,KEY2,... : The columns with these keys first, in this order, then the others.
          |  -portfolio:NAME=TOOL1,TOOL2,... : Add the virtual portfolio NAME of the tools: per benchmark
          |                  the fastest run of the tools that solved it (repeatable).
          |  -tools:TOOL1,TOOL2,... : Only these tools and portfolios (NAME of -portfolio), in this order
@@ -863,6 +924,9 @@ object Main {
         case "-cactus-pdf" :: tail =>
           doCactusPdf = true
           remainingArgs = tail
+        case "-plot-html" :: tail =>
+          plotHtml = true
+          remainingArgs = tail
         case "-v" :: tail =>
           verbosityLevel = 1
           remainingArgs = tail
@@ -871,27 +935,44 @@ object Main {
             verbosityLevel = opt.substring(3).toInt
           } catch {
             case _: NumberFormatException =>
-              println(s"Invalid verbosity level in option: $opt")
-              println(usage)
-              return
+              exitWithError(s"Invalid verbosity level in option: $opt\n\n$usage")
           }
           remainingArgs = tail
-        case opt :: tail if opt.startsWith("-rename-tool:") =>
-          val spec = opt.substring("-rename-tool:".length)
-          val eqIdx = spec.indexOf('=')
-          if (eqIdx > 0) {
-            Settings.runtimeToolNameReplacements(spec.substring(0, eqIdx)) = spec.substring(eqIdx + 1)
+        case opt :: tail if Seq("-rename-tool:", "-rename-header:", "-rename-label:",
+                                "-rename-col:").exists(opt.startsWith) =>
+          val spec = opt.substring(opt.indexOf(':') + 1)
+          val (from, to) = spec.indexOf('=') match {
+            case i if i > 0 => (spec.substring(0, i), spec.substring(i + 1))
+            case _ => exitWithError(s"Expected FROM=TO in option: $opt\n\n$usage")
+          }
+          opt.takeWhile(_ != ':') match {
+            case "-rename-tool" => runtimeToolNameReplacements(from) = to
+            case "-rename-header" => headerRenames(from) = to
+            case "-rename-label" => axisLabelRenames(from) = to
+            case _ => columnRenames(from.toLowerCase) = to
           }
           remainingArgs = tail
-        case opt :: tail if opt.startsWith("-rename-header:") =>
-          val spec = opt.substring("-rename-header:".length)
-          val eqIdx = spec.indexOf('=')
-          if (eqIdx > 0) {
-            Settings.headerRenames(spec.substring(0, eqIdx)) = spec.substring(eqIdx + 1)
+        case opt :: tail if Seq("-plot-width:", "-plot-font-size:", "-plot-aspect:",
+                                "-scatter-marker-size:", "-scatter-marker-opacity:")
+                              .exists(opt.startsWith) =>
+          val number =
+            try opt.substring(opt.indexOf(':') + 1).toDouble
+            catch { case _ : NumberFormatException =>
+              exitWithError(s"Invalid number in option: $opt\n\n$usage") }
+          opt.takeWhile(_ != ':') match {
+            case "-plot-width" => plotWidth = Some(number)
+            case "-plot-font-size" => plotFontSize = Some(number)
+            case "-plot-aspect" => plotAspect = Some(number)
+            case "-scatter-marker-size" => scatterMarkerSize = Some(number)
+            case _ => scatterMarkerOpacity = Some(number)
           }
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-hide-col:") =>
           Settings.hiddenColumns += opt.substring("-hide-col:".length).toLowerCase
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-col-order:") =>
+          Settings.columnOrder = opt.substring("-col-order:".length).split(",")
+                                    .map(_.trim.toLowerCase).filter(_.nonEmpty).toSeq
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-portfolio:") =>
           val spec = opt.substring("-portfolio:".length)
@@ -899,9 +980,7 @@ object Main {
           val tools = spec.substring(eqIdx + 1).split(",").map(_.trim)
                           .filter(_.nonEmpty).toSet
           if (eqIdx <= 0 || tools.isEmpty) {
-            println(s"Invalid portfolio in option: $opt\n")
-            println(usage)
-            return
+            exitWithError(s"Invalid portfolio in option: $opt\n\n$usage")
           }
           Settings.portfoliosFromArgs +=
             VirtualPortfolio(spec.substring(0, eqIdx), tools, Set("all"))
@@ -925,16 +1004,43 @@ object Main {
             case Array(tool, other) =>
               comparisonsTex :+= ((tool, other))
             case _ =>
-              println(s"Invalid pair of tools in option: $opt\n")
-              println(usage)
-              return
+              exitWithError(s"Invalid pair of tools in option: $opt\n\n$usage")
           }
           remainingArgs = tail
-        case opt :: tail if opt.startsWith("-runtimes:") =>
-          runtimeBasesText :+= opt.substring("-runtimes:".length).trim
+        case opt :: tail if opt.startsWith("-runtimes:") || opt.startsWith("-runtimes-tex:") =>
+          val spec = opt.substring(opt.indexOf(':') + 1)
+          val base = spec.takeWhile(_ != '=').trim
+          val tools = spec.dropWhile(_ != '=').drop(1).split(",")
+                          .map(_.trim).filter(_.nonEmpty).toSeq
+          if (opt.startsWith("-runtimes:"))
+            runtimeBasesText :+= ((base, tools))
+          else
+            runtimeBasesTex :+= ((base, tools))
           remainingArgs = tail
-        case opt :: tail if opt.startsWith("-runtimes-tex:") =>
-          runtimeBasesTex :+= opt.substring("-runtimes-tex:".length).trim
+        case "-wall-times" :: tail =>
+          doWallTimesText = true
+          remainingArgs = tail
+        case "-wall-times-tex" :: tail =>
+          doWallTimesTex = true
+          remainingArgs = tail
+        case "-peak-memory" :: tail =>
+          doPeakMemoryText = true
+          remainingArgs = tail
+        case "-peak-memory-tex" :: tail =>
+          doPeakMemoryTex = true
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-cactus-verdict-pdf:") =>
+          cactusPerVerdictNames :+= opt.substring("-cactus-verdict-pdf:".length)
+          remainingArgs = tail
+        case opt :: tail if opt.startsWith("-scatter-pdf:") =>
+          val spec = opt.substring("-scatter-pdf:".length)
+          val eqIdx = spec.indexOf('=')
+          spec.substring(eqIdx + 1).split(",").map(_.trim) match {
+            case Array(tool, other) if eqIdx > 0 =>
+              scatterPlots :+= ((spec.substring(0, eqIdx), tool, other))
+            case _ =>
+              exitWithError(s"Invalid scatter plot in option: $opt\n\n$usage")
+          }
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-no-best:") =>
           noBestTools ++= opt.substring("-no-best:".length).split(",")
@@ -942,6 +1048,12 @@ object Main {
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-midrule-after:") =>
           midruleAfterGroups += opt.substring("-midrule-after:".length)
+          remainingArgs = tail
+        case "-tex-tabular" :: tail =>
+          texTabularOnly = true
+          remainingArgs = tail
+        case "-matrix-upright" :: tail =>
+          matrixUpright = true
           remainingArgs = tail
         case "-incorrect-as-unsolved" :: tail =>
           incorrectAsUnsolved = true
@@ -952,9 +1064,7 @@ object Main {
               Some(opt.substring("-unknown-as-timeout:".length).toDouble)
           } catch {
             case _: NumberFormatException =>
-              println(s"Invalid number of seconds in option: $opt")
-              println(usage)
-              return
+              exitWithError(s"Invalid number of seconds in option: $opt\n\n$usage")
           }
           remainingArgs = tail
         case "-crashes-as-errors" :: tail =>
@@ -968,9 +1078,7 @@ object Main {
                              .map(_.trim).filter(_.nonEmpty).toSeq
           remainingArgs = tail
         case opt :: tail if opt.startsWith("-") =>
-          println(s"Unknown option: $opt\n")
-          println(usage)
-          return
+          exitWithError(s"Unknown option: $opt\n\n$usage")
         case path :: tail =>
           inFileNames += path
           remainingArgs = tail
@@ -980,19 +1088,19 @@ object Main {
     if (!doTable5Tex && !doTable6Tex && !doTable6Text && !doTable5SimpleText && !doTable5SimpleTex && !doMatrixText && !doMatrixTex && !doMatrixDiff && !doErrors && !doInconsistent && !doCactusPdf && !doCactusPlotly &&
         !doOverviewText && !doOverviewTex && !doUniqueText && !doUniqueTex &&
         comparisonsText.isEmpty && comparisonsTex.isEmpty &&
-        runtimeBasesText.isEmpty && runtimeBasesTex.isEmpty) {
+        runtimeBasesText.isEmpty && runtimeBasesTex.isEmpty &&
+        !doWallTimesText && !doWallTimesTex && !doPeakMemoryText && !doPeakMemoryTex &&
+        cactusPerVerdictNames.isEmpty && scatterPlots.isEmpty) {
       doTable5Text = true
     }
 
     if (inFileNames.isEmpty) {
-      println("An input filename must be provided.\n")
-      println(usage)
-      return
+      exitWithError(s"An input filename must be provided.\n\n$usage")
     }
 
     inFileNames.find(name => !new java.io.File(name).exists) match {
       case Some(inFileName) =>
-        println(inFileName + " not found!"); return
+        exitWithError(inFileName + " not found!")
       case None =>
     }
 
@@ -1001,16 +1109,14 @@ object Main {
 
     ymlFilesOfInputs.find(_._2.isEmpty) match {
       case Some((inFileName, _)) =>
-        println("No .yml files found in " + inFileName)
-        return
+        exitWithError("No .yml files found in " + inFileName)
       case None =>
     }
 
     val groupNames = ymlFilesOfInputs.map(input => new java.io.File(input._1).getName)
     groupNames.diff(groupNames.distinct).headOption match {
       case Some(name) =>
-        println("Several inputs with the name " + name + ", the name of a group.")
-        return
+        exitWithError("Several inputs with the name " + name + ", the name of a group.")
       case None =>
     }
     val groups = for (((_, ymlFiles), name) <- ymlFilesOfInputs.zip(groupNames))
@@ -1021,11 +1127,11 @@ object Main {
     val allGroups = if (groups.size == 1) groups.head else unionOfGroups(groups)
     val unnamed = ((comparisonsText ++ comparisonsTex)
       .flatMap(pair => Seq(pair._1, pair._2)) ++
-      runtimeBasesText ++ runtimeBasesTex).distinct
+      (runtimeBasesText ++ runtimeBasesTex).flatMap { case (base, tools) => base +: tools } ++
+      scatterPlots.flatMap(plot => Seq(plot._2, plot._3))).distinct
       .filter(name => namedRow(allGroups, name).isEmpty)
     if (unnamed.nonEmpty) {
-      println("No single tool with runs named " + unnamed.mkString(", ") + ".")
-      return
+      exitWithError("No single tool with runs named " + unnamed.mkString(", ") + ".")
     }
     printOutputs(groups, allGroups)
   }
@@ -1109,7 +1215,8 @@ object Main {
             }
           val expected = expectedVerdicts.getOrElse(
             rawRunInfo.bmName, expectedStatusParser(rawRunInfo.expected))
-          RunInfo(rawRunInfo.bmName, expected, result, duration)
+          RunInfo(rawRunInfo.bmName, expected, result, duration,
+                  peakMemoryKB = rawRunInfo.maxRss.map(Util.kiloBytes))
         })
         printInfo("done! " + runInfos.length + " runs found.")
         (summary, runInfos.runs)
@@ -1155,8 +1262,7 @@ object Main {
     }
 
     val toolRunsWithoutVP : Seq[(Summary, RunInfos)] = if(mergeYmlFiles || combineResults) {
-      println
-      printWarning("Merging files with same tool name and options...")
+      printInfo("Merging files with same tool name and options...")
       val groupedToolRuns =
         if (ignoreDifferentOptions) {
           unmergedToolRuns.groupBy(p => p._1.fullToolName)
@@ -1229,7 +1335,6 @@ object Main {
 ////////////////////////////////////////////////////////////////////////////////
 // Fairness checks
     if(printFairnessWarnings) {
-      println
       val summaries = toolRuns.map(_._1)
       if (summaries.exists(s => s.cpuCount != summaries.head.cpuCount)) {
         printWarning("Runs were executed on systems with different CPU counts!")
@@ -1348,6 +1453,16 @@ object Main {
     val filteredToolRuns = renamed(allGroups.toolRuns)
     val finalCommonBenchmarkNames = allGroups.benchmarkNames
 
+    // one wall time limit per tool, that of its summary over all groups
+    if (doWallTimesText || doWallTimesTex || scatterPlots.nonEmpty)
+      for (rows <- (for (group <- groups; (summary, _) <- group.toolRuns)
+                    yield (group.name, summary)).groupBy(_._2.fullToolName).values
+           if rows.map(_._2.wallTimeLimit).distinct.size > 1)
+        exitWithError(s"Different wall time limits in the inputs of ${rows.head._2.fullToolName} (" +
+                      rows.map { case (group, s) =>
+                        s"$group/${s.ymlFileName}: ${s.wallTimeLimit} s" }.mkString(", ") +
+                      "); -wall-times and -scatter-pdf are for one limit per tool.")
+
     if (printCombinatorialResults) {
       println
       for (((summary, runs), i) <- filteredToolRuns.zipWithIndex) {
@@ -1462,14 +1577,39 @@ object Main {
       printSep()
       GroupTables.printComparison(namedRows(comparisonsTex), latex = true)
     }
-    def printRuntimes(base : String, latex : Boolean) = {
+    // without a list, all other tools
+    def runtimeComparisons(bases : Seq[(String, Seq[String])]) =
+      for ((base, tools) <- bases) yield {
+        val baseRow = renamedRow(base)
+        (baseRow,
+         if (tools.nonEmpty) tools.map(renamedRow)
+         else inTableOrder(filteredToolRuns)
+                .filter(_._1.fullToolName != baseRow._1.fullToolName))
+      }
+    if (runtimeBasesText.nonEmpty) {
       printSep()
-      val baseRow = renamedRow(base)
-      GroupTables.printRuntimes(baseRow, inTableOrder(filteredToolRuns)
-        .filter(_._1.fullToolName != baseRow._1.fullToolName), latex)
+      GroupTables.printRuntimes(runtimeComparisons(runtimeBasesText), latex = false)
     }
-    runtimeBasesText.foreach(printRuntimes(_, latex = false))
-    runtimeBasesTex.foreach(printRuntimes(_, latex = true))
+    if (runtimeBasesTex.nonEmpty) {
+      printSep()
+      GroupTables.printRuntimes(runtimeComparisons(runtimeBasesTex), latex = true)
+    }
+    for ((selected, latex) <- Seq((doWallTimesText, false), (doWallTimesTex, true))
+         if selected) {
+      printSep()
+      GroupTables.printWallTimes(inTableOrder(filteredToolRuns), latex)
+    }
+    for ((selected, latex) <- Seq((doPeakMemoryText, false), (doPeakMemoryTex, true))
+         if selected) {
+      printSep()
+      GroupTables.printPeakMemory(inTableOrder(filteredToolRuns), latex)
+    }
+    if (!disableAllPlots) {
+      for (name <- cactusPerVerdictNames)
+        Plotting.plotCactusPerVerdict(filteredToolRuns, name)
+      for ((name, tool, other) <- scatterPlots)
+        Plotting.plotScatter(renamedRow(tool), renamedRow(other), name)
+    }
 
     for ((summary, runs) <- filteredToolRuns) {
       if (runs.incorrectRuns.nonEmpty) {
@@ -1478,12 +1618,12 @@ object Main {
       if(runs.unsoundRuns.nonEmpty) {
         printInfo("\nUnsound (expected unsat, got sat)")
         runs.unsoundRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
-        println
+        printInfo("")
       }
       if (runs.incompleteRuns.nonEmpty) {
         printInfo("\nIncomplete (expected sat, got unsat)")
         runs.incompleteRuns.foreach(run => printInfo(s"${run.bmName} (${run.duration} s)"))
-        println
+        printInfo("")
       }
     }
 
@@ -1584,12 +1724,10 @@ object Main {
     }
 
     if (!disableAllPlots && doCactusPdf) {
-      println
       Plotting.plotCactusByTime(filteredToolRuns)
     }
     
     if (!disableAllPlots && doCactusPlotly) {
-      println()
       printWarning("Cactus plot generation with Plotly is currently disabled/not implemented.")
     }
   }

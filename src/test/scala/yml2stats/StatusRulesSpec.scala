@@ -2,6 +2,7 @@ package yml2stats
 
 import org.scalatest.FunSuite
 import yml2stats.Benchmarks._
+import yml2stats.parser.Z3OutputParser
 
 // the group g1: tools a, b, c on p1 to p5; a answers sat on p3, expected unsat
 class StatusRulesSpec extends FunSuite {
@@ -35,5 +36,11 @@ class StatusRulesSpec extends FunSuite {
       Settings.incorrectAsUnsolved = false
       Settings.portfoliosFromArgs.clear()
     }
+  }
+
+  test("a nonzero exit code is an error without a result, else the result") {
+    val crash = Seq("", "other error (exit code: 139)")
+    assert(Z3OutputParser(crash, "p.smt2").isInstanceOf[Error])
+    assert(Z3OutputParser("sat" +: crash, "p.smt2") == True)
   }
 }

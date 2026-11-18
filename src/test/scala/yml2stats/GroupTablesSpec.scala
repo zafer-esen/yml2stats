@@ -28,4 +28,24 @@ class GroupTablesSpec extends FunSuite {
       Settings.portfoliosFromArgs.clear()
     }
   }
+
+  private def run(name : String, result : Result, duration : Double,
+                  peakMemoryKB : Option[Long]) =
+    RunInfo(name, Unknown, result, duration, peakMemoryKB = peakMemoryKB)
+
+  private val runs = RunInfos(Seq(
+    run("p1", True, 1.0, Some(100)), run("p2", False, 2.0, Some(300)),
+    run("p3", True, 280.0, None), run("p4", Timeout, 300.0, Some(900))))
+
+  test("wall times: percentiles of the solved benchmarks by the nearest rank, late ones") {
+    assert(GroupTables.wallTimes(runs, 270.0) ==
+             GroupTables.WallTimes(3, Some(2.0), Some(280.0), Some(280.0),
+                                   Some(280.0), 1))
+  }
+
+  test("peak memory: solved benchmarks and all runs, runs without it left out") {
+    assert(GroupTables.peakMemory(runs) ==
+             GroupTables.PeakMemory(Some(100.0), Some(300.0),
+                                    Some(300.0), Some(900.0)))
+  }
 }

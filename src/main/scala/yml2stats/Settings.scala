@@ -77,12 +77,34 @@ object Settings {
   var noBestTools = Seq[String]()
   // groups after which LaTeX tables with a row per group have a \midrule
   val midruleAfterGroups = scala.collection.mutable.Set[String]()
+  var texTabularOnly = false
+  // upright column headers and no vertical rule in the LaTeX matrix
+  var matrixUpright = false
   // pairs of a tool and another tool compared over all groups
   var comparisonsText = Seq[(String, String)]()
   var comparisonsTex  = Seq[(String, String)]()
-  // base tools of the runtime comparisons over all groups
-  var runtimeBasesText = Seq[String]()
-  var runtimeBasesTex  = Seq[String]()
+  // base tools of the runtime comparisons, each with the tools compared
+  // with it, all others if none
+  var runtimeBasesText = Seq[(String, Seq[String])]()
+  var runtimeBasesTex  = Seq[(String, Seq[String])]()
+  var doWallTimesText = false
+  var doWallTimesTex  = false
+  var doPeakMemoryText = false
+  var doPeakMemoryTex  = false
+  var cactusPerVerdictNames = Seq[String]()
+  // name, tool and other tool
+  var scatterPlots = Seq[(String, String, String)]()
+  // by the default label
+  val axisLabelRenames = scala.collection.mutable.Map[String, String]()
+  // in the document, in points
+  var plotWidth : Option[Double] = None
+  var plotFontSize : Option[Double] = None
+  // height / width
+  var plotAspect : Option[Double] = None
+  // in points, in the document with plotWidth
+  var scatterMarkerSize : Option[Double] = None
+  var scatterMarkerOpacity : Option[Double] = None
+  var plotHtml = false
 
   var verbosityLevel = 1 // 0 : quiet, 1 : print warnings, 2 : print information
 
@@ -190,7 +212,11 @@ object Settings {
   // Runtime overrides from CLI flags
   val runtimeToolNameReplacements = scala.collection.mutable.Map[String, String]()
   val headerRenames = scala.collection.mutable.Map[String, String]()
+  // headers by column key
+  val columnRenames = scala.collection.mutable.Map[String, String]()
   val hiddenColumns = scala.collection.mutable.Set[String]()
+  // keys of the columns before the others
+  var columnOrder = Seq[String]()
   // created in addition to virtualPortfolios, which need doPortfolio
   val portfoliosFromArgs = scala.collection.mutable.ArrayBuffer[VirtualPortfolio]()
   // the tools of the tables in their order, all tools by name if empty
